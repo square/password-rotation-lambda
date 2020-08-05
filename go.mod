@@ -1,4 +1,4 @@
-module github.com/square/rotate-password-lambda
+module github.com/square/password-rotation-lambda
 
 go 1.14
 

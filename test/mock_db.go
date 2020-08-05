@@ -5,7 +5,7 @@ package test
 import (
 	"context"
 
-	"github.com/square/rotate-password-lambda/db"
+	"github.com/square/password-rotation-lambda/db"
 )
 
 type MockPasswordSetter struct {

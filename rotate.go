@@ -19,7 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
 	"github.com/aws/aws-sdk-go/service/secretsmanager/secretsmanageriface"
 
-	"github.com/square/rotate-password-lambda/db"
+	"github.com/square/password-rotation-lambda/db"
 )
 
 const (

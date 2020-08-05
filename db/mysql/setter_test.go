@@ -13,9 +13,9 @@ import (
 	"github.com/aws/aws-sdk-go/service/rds"
 	"github.com/go-test/deep"
 
-	"github.com/square/rotate-password-lambda/db"
-	"github.com/square/rotate-password-lambda/db/mysql"
-	"github.com/square/rotate-password-lambda/test"
+	"github.com/square/password-rotation-lambda/db"
+	"github.com/square/password-rotation-lambda/db/mysql"
+	"github.com/square/password-rotation-lambda/test"
 )
 
 func TestPasswordSetterOne(t *testing.T) {
