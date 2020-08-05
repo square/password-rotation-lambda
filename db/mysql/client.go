@@ -14,7 +14,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 
-	"github.com/square/rotate-password-lambda/db"
+	"github.com/square/password-rotation-lambda/db"
 )
 
 // PasswordClient sets and verifies MySQL passwords. A PasswordSetter uses a

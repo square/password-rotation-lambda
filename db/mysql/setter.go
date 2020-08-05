@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/rds"
 	"github.com/aws/aws-sdk-go/service/rds/rdsiface"
 
-	"github.com/square/rotate-password-lambda/db"
+	"github.com/square/password-rotation-lambda/db"
 )
 
 func init() {

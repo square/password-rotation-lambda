@@ -9,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	rdb "github.com/square/rotate-password-lambda/db"
-	"github.com/square/rotate-password-lambda/db/mysql"
+	rdb "github.com/square/password-rotation-lambda/db"
+	"github.com/square/password-rotation-lambda/db/mysql"
 )
 
 var (

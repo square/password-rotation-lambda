@@ -8,8 +8,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/rds"
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
 
-	"github.com/square/rotate-password-lambda"
-	"github.com/square/rotate-password-lambda/db/mysql"
+	"github.com/square/password-rotation-lambda"
+	"github.com/square/password-rotation-lambda/db/mysql"
 )
 
 func main() {

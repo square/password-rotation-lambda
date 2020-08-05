@@ -1,6 +1,6 @@
-# rotate-password-lambda-go
+# Password Rotation Lambda
 
-`rotate-password-lambda-go` is an [AWS Lambda](https://aws.amazon.com/lambda/)
+`password-rotation-lambda` is an [AWS Lambda](https://aws.amazon.com/lambda/)
 function (in Go) that rotates database passwords using [AWS Secrets Manager](https://aws.amazon.com/secrets-manager/).
 Currently, it supports RDS for MySQL.
 
@@ -20,8 +20,8 @@ import (
 	"github.com/aws/aws-sdk-go/service/rds"
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
 
-	"github.com/square/rotate-password-lambda"
-	"github.com/square/rotate-password-lambda/db/mysql"
+	"github.com/square/password-rotation-lambda"
+	"github.com/square/password-rotation-lambda/db/mysql"
 )
 
 func main() {
