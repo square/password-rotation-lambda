@@ -33,7 +33,7 @@ type PasswordSetter interface {
 
 	// SetPassword changes the password from the current to the new credentials.
 	// The database-specific implementation must track which databases were successfully
-	// changed or not. On failure, the caller might call RollBack to reverse the
+	// changed or not. On failure, the caller might call Rollback to reverse the
 	// successfully changed databases, i.e. restore all database to the original
 	// credentials.
 	SetPassword(ctx context.Context, creds NewPassword) error
@@ -41,9 +41,9 @@ type PasswordSetter interface {
 	// VerifyPassword verifies the new credentials.
 	VerifyPassword(ctx context.Context, creds NewPassword) error
 
-	// RollBack reverses SetPassword by changing the password from the new to
+	// Rollback reverses SetPassword by changing the password from the new to
 	// the current (original) credentials. The database-specific implementation
 	// must track and roll back only the databases which were successfully changed
 	// by SetPassword.
-	RollBack(ctx context.Context, creds NewPassword) error
+	Rollback(ctx context.Context, creds NewPassword) error
 }

@@ -400,7 +400,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 			Step: "setSecret",
 			Time: time.Now(),
 		})
-		if err2 := r.db.RollBack(ctx, creds); err2 != nil {
+		if err2 := r.db.Rollback(ctx, creds); err2 != nil {
 			return fmt.Errorf("setting new password and rollback failed: %v (rollback error: %v)", err1, err2)
 		}
 
@@ -477,7 +477,7 @@ func (r *Rotator) TestSecret(ctx context.Context, event map[string]string) error
 			Step: "testSecret",
 			Time: time.Now(),
 		})
-		if err2 := r.db.RollBack(ctx, creds); err2 != nil {
+		if err2 := r.db.Rollback(ctx, creds); err2 != nil {
 			return fmt.Errorf("verifying new password and rollback failed: %v (rollback error: %v)", err1, err2)
 		}
 

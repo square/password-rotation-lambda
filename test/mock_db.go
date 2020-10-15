@@ -12,7 +12,7 @@ type MockPasswordSetter struct {
 	InitFunc           func(context.Context, map[string]string) error
 	SetPasswordFunc    func(ctx context.Context, creds db.NewPassword) error
 	VerifyPasswordFunc func(ctx context.Context, creds db.NewPassword) error
-	RollBackFunc       func(ctx context.Context, creds db.NewPassword) error
+	RollbackFunc       func(ctx context.Context, creds db.NewPassword) error
 }
 
 func (m MockPasswordSetter) Init(ctx context.Context, s map[string]string) error {
@@ -36,9 +36,9 @@ func (m MockPasswordSetter) VerifyPassword(ctx context.Context, creds db.NewPass
 	return nil
 }
 
-func (m MockPasswordSetter) RollBack(ctx context.Context, creds db.NewPassword) error {
-	if m.RollBackFunc != nil {
-		return m.RollBackFunc(ctx, creds)
+func (m MockPasswordSetter) Rollback(ctx context.Context, creds db.NewPassword) error {
+	if m.RollbackFunc != nil {
+		return m.RollbackFunc(ctx, creds)
 	}
 	return nil
 }
