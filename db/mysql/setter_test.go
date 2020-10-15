@@ -536,7 +536,7 @@ func TestPasswordSetterParallel(t *testing.T) {
 }
 
 func TestPasswordRollback(t *testing.T) {
-	// Test that RollBack swaps creds.Current and creds.New so that previous
+	// Test that Rollback swaps creds.Current and creds.New so that previous
 	// password sets with the creds are rolled back to the original password
 
 	// Mock the RDS client to return data that simulates have only 1 RDS instance
@@ -585,8 +585,8 @@ func TestPasswordRollback(t *testing.T) {
 		t.Error(err)
 	}
 
-	// Normally, RollBack is called after SetPassword. And we only roll back passwords
-	// the were set, so first we call SetPassword to mark them "set", then RollBack will
+	// Normally, Rollback is called after SetPassword. And we only roll back passwords
+	// the were set, so first we call SetPassword to mark them "set", then Rollback will
 	// revert by swapping the creds
 	creds := db.NewPassword{
 		Current: db.Credentials{
@@ -606,7 +606,7 @@ func TestPasswordRollback(t *testing.T) {
 		t.Error(err)
 	}
 
-	err = ps.RollBack(context.TODO(), creds)
+	err = ps.Rollback(context.TODO(), creds)
 	if err != nil {
 		t.Error(err)
 	}
@@ -616,7 +616,7 @@ func TestPasswordRollback(t *testing.T) {
 			Current: db.Credentials{Username: "user", Password: "old_pass", Hostname: "addr:3306"},
 			New:     db.Credentials{Username: "user", Password: "new_pass", Hostname: "addr:3306"},
 		},
-		{ // RollBack (new pass -> old)
+		{ // Rollback (new pass -> old)
 			Current: db.Credentials{Username: "user", Password: "new_pass", Hostname: "addr:3306"}, // swapped
 			New:     db.Credentials{Username: "user", Password: "old_pass", Hostname: "addr:3306"}, // swapped
 		},

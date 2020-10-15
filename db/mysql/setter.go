@@ -130,14 +130,14 @@ func (m *PasswordSetter) SetPassword(ctx context.Context, creds db.NewPassword) 
 	return m.setAll(ctx, creds, set_password)
 }
 
-// RollBack sets the password on all RDS instances. For this implementation, it
+// Rollback sets the password on all RDS instances. For this implementation, it
 // is identical to SetPassword.
-func (m *PasswordSetter) RollBack(ctx context.Context, creds db.NewPassword) error {
+func (m *PasswordSetter) Rollback(ctx context.Context, creds db.NewPassword) error {
 	t0 := time.Now()
-	log.Println("RollBack call")
+	log.Println("Rollback call")
 	defer func() {
 		d := time.Now().Sub(t0)
-		log.Printf("RollBack return: %dms", d.Milliseconds())
+		log.Printf("Rollback return: %dms", d.Milliseconds())
 	}()
 	swapCreds := db.NewPassword{
 		Current: creds.New,
