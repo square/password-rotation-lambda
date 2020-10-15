@@ -127,7 +127,7 @@ func (m *PasswordSetter) SetPassword(ctx context.Context, creds db.NewPassword) 
 		d := time.Now().Sub(t0)
 		log.Printf("SetPassword return: %dms", d.Milliseconds())
 	}()
-	return m.setAll(ctx, creds, true) // true = setting
+	return m.setAll(ctx, creds, set_password)
 }
 
 // RollBack sets the password on all RDS instances. For this implementation, it
@@ -139,7 +139,11 @@ func (m *PasswordSetter) RollBack(ctx context.Context, creds db.NewPassword) err
 		d := time.Now().Sub(t0)
 		log.Printf("RollBack return: %dms", d.Milliseconds())
 	}()
-	return m.setAll(ctx, creds, true) // true = setting
+	swapCreds := db.NewPassword{
+		Current: creds.New,
+		New:     creds.Current,
+	}
+	return m.setAll(ctx, swapCreds, rollback_password) // true = setting
 }
 
 // VerifyPassword connects to all RDS to verify that the username and password work.
@@ -150,10 +154,16 @@ func (m *PasswordSetter) VerifyPassword(ctx context.Context, creds db.NewPasswor
 		d := time.Now().Sub(t0)
 		log.Printf("VerifyPassword return: %dms", d.Milliseconds())
 	}()
-	return m.setAll(ctx, creds, false) // false = verifying
+	return m.setAll(ctx, creds, verify_password)
 }
 
 // --------------------------------------------------------------------------
+
+const (
+	set_password      = "setting"
+	verify_password   = "verify"
+	rollback_password = "rollback"
+)
 
 // setAll sets or verifies the password on all databases in parallel. It waits
 // for all to complete, even after the context is cancelled to let the in-flight
@@ -164,12 +174,7 @@ func (m *PasswordSetter) VerifyPassword(ctx context.Context, creds db.NewPasswor
 // Else, any failure causes an error return.
 //
 // This func is called by SetPassword and Rollback.
-func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, setting bool) error {
-	action := "verify" // make log output accurate
-	if setting {
-		action = "setting"
-	}
-
+func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, action string) error {
 	log.Printf("%s password on %d RDS instances, %d in parallel...", action, len(m.dbs), m.cfg.Parallel)
 	var wg sync.WaitGroup
 	for i := range m.dbs {
@@ -179,6 +184,11 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, setti
 		case <-ctx.Done():
 			wg.Wait()
 			return ctx.Err()
+		}
+
+		if action == rollback_password && !m.dbs[i].set {
+			log.Printf("%s: new password was not set, skip rollback", m.dbs[i].hostname)
+			continue
 		}
 
 		// Change password on one database
@@ -198,22 +208,31 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, setti
 			creds.Current.Hostname = m.dbs[dbNo].hostname
 			creds.New.Hostname = m.dbs[dbNo].hostname
 
-			var err error
-			if setting {
-				m.dbs[dbNo].set = true
-				m.dbs[dbNo].setError = m.setOne(ctx, creds, setting)
-				err = m.dbs[dbNo].setError
-			} else { // verifying
-				m.dbs[dbNo].verified = true
-				m.dbs[dbNo].verifyError = m.setOne(ctx, creds, setting)
-				err = m.dbs[dbNo].verifyError
+			if err := m.setOne(ctx, creds, action); err != nil {
+				log.Printf("%s: error %s password: %s", m.dbs[dbNo].hostname, action, err)
+				switch action {
+				case set_password:
+					m.dbs[dbNo].setError = err
+				case verify_password:
+					m.dbs[dbNo].verifyError = err
+				case rollback_password:
+					m.dbs[dbNo].rollbackError = err
+				default:
+					panic("invalid action passed to setAll: " + action)
+				}
+				return
 			}
 
-			// Log final error, if any, or the warm fuzzy feeling of success
-			if err != nil {
-				log.Printf("%s: error %s password: %s", m.dbs[dbNo].hostname, action, m.dbs[dbNo].setError)
-			} else {
-				log.Printf("%s: success %s password", m.dbs[dbNo].hostname, action)
+			log.Printf("%s: success %s password", m.dbs[dbNo].hostname, action)
+			switch action {
+			case set_password:
+				m.dbs[dbNo].set = true
+			case verify_password:
+				m.dbs[dbNo].verified = true
+			case rollback_password:
+				m.dbs[dbNo].rolledBack = true
+			default:
+				panic("invalid action passed to setAll: " + action)
 			}
 		}(i, creds)
 	}
@@ -238,23 +257,21 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, setti
 // retries as configured.
 //
 // This func is called as a goroutine from setAll.
-func (m *PasswordSetter) setOne(ctx context.Context, creds db.NewPassword, setting bool) error {
-	action := "verify" // make log output accurate
-	if setting {
-		action = "setting"
-	}
-
+func (m *PasswordSetter) setOne(ctx context.Context, creds db.NewPassword, action string) error {
 	for tryNo := uint(1); tryNo <= m.tries; tryNo++ {
 		// Do the low-level password change on the database
 		var err error
-		if setting {
-			err = m.cfg.DbClient.SetPassword(ctx, creds)
-		} else { // verifying
+		if action == verify_password {
 			err = m.cfg.DbClient.VerifyPassword(ctx, creds)
+		} else {
+			err = m.cfg.DbClient.SetPassword(ctx, creds)
 		}
 		if err == nil { // early return on success
 			return nil
 		}
+
+		// ------------------------------------------------------------------
+		// Error, retry?
 		if tryNo == m.tries { // early return on last try (don't sleep)
 			return err
 		}

@@ -534,3 +534,94 @@ func TestPasswordSetterParallel(t *testing.T) {
 		t.Errorf("got %d dbs running in parallel, expected 0", gotDbsRunning)
 	}
 }
+
+func TestPasswordRollback(t *testing.T) {
+	// Test that RollBack swaps creds.Current and creds.New so that previous
+	// password sets with the creds are rolled back to the original password
+
+	// Mock the RDS client to return data that simulates have only 1 RDS instance
+	rdsClient := test.MockRDSClient{
+		DescribeDBInstancesFunc: func(input *rds.DescribeDBInstancesInput) (*rds.DescribeDBInstancesOutput, error) {
+			return &rds.DescribeDBInstancesOutput{
+				DBInstances: []*rds.DBInstance{
+					{
+						DBInstanceArn:        aws.String("arn"),
+						DBInstanceIdentifier: aws.String("db-1"),
+						Endpoint: &rds.Endpoint{
+							Address: aws.String("addr:3306"),
+							Port:    aws.Int64(3306),
+						},
+					},
+				},
+			}, nil
+		},
+	}
+
+	// Mock the PasswordClient so we don't have to use a real MySQL/RDS instance
+	gotCreds := []db.NewPassword{}
+	gotVerified := []db.NewPassword{}
+	mysqlClient := test.MockMySQLPasswordClient{
+		SetPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			gotCreds = append(gotCreds, creds)
+			return nil
+		},
+		VerifyPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			gotVerified = append(gotVerified, creds)
+			return nil
+		},
+	}
+
+	// Create new PasswordSetter with bare minimum config
+	cfg := mysql.Config{
+		RDSClient: rdsClient,
+		DbClient:  mysqlClient,
+	}
+	ps := mysql.NewPasswordSetter(cfg)
+
+	// Always need to call Init first
+	secret := map[string]string{}
+	err := ps.Init(context.TODO(), secret)
+	if err != nil {
+		t.Error(err)
+	}
+
+	// Normally, RollBack is called after SetPassword. And we only roll back passwords
+	// the were set, so first we call SetPassword to mark them "set", then RollBack will
+	// revert by swapping the creds
+	creds := db.NewPassword{
+		Current: db.Credentials{
+			Username: "user",
+			Password: "old_pass",
+			Hostname: "addr:3306",
+		},
+		New: db.Credentials{
+			Username: "user",
+			Password: "new_pass",
+			Hostname: "addr:3306",
+		},
+	}
+
+	err = ps.SetPassword(context.TODO(), creds)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = ps.RollBack(context.TODO(), creds)
+	if err != nil {
+		t.Error(err)
+	}
+
+	expectCreds := []db.NewPassword{
+		{ // SetPassword (old pass -> new)
+			Current: db.Credentials{Username: "user", Password: "old_pass", Hostname: "addr:3306"},
+			New:     db.Credentials{Username: "user", Password: "new_pass", Hostname: "addr:3306"},
+		},
+		{ // RollBack (new pass -> old)
+			Current: db.Credentials{Username: "user", Password: "new_pass", Hostname: "addr:3306"}, // swapped
+			New:     db.Credentials{Username: "user", Password: "old_pass", Hostname: "addr:3306"}, // swapped
+		},
+	}
+	if diff := deep.Equal(gotCreds, expectCreds); diff != nil {
+		t.Error(diff)
+	}
+}
