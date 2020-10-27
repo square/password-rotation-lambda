@@ -127,6 +127,14 @@ func (m *PasswordSetter) SetPassword(ctx context.Context, creds db.NewPassword) 
 		d := time.Now().Sub(t0)
 		log.Printf("SetPassword return: %dms", d.Milliseconds())
 	}()
+
+	// Reset flags and errors between attempts to set the password. If this
+	// isn't done and run 1 fails but run 2 succeeds, it'll cause a false-positive
+	// return error from setAll because in run 2 it'll see the error from run 1.
+	for i, db := range m.dbs {
+		m.dbs[i] = dbInstance{hostname: db.hostname}
+	}
+
 	return m.setAll(ctx, creds, set_password)
 }
 
@@ -247,7 +255,7 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, actio
 			continue
 		}
 		return fmt.Errorf("%s password failed on at least one database (%s),"+
-			" see previous log output for errors", action, db.hostname)
+			" see previous log output for 'error %s password'", action, db.hostname, action)
 	}
 
 	return nil
