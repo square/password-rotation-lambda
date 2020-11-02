@@ -5,7 +5,7 @@ package test
 import (
 	"context"
 
-	"github.com/square/password-rotation-lambda/db"
+	"github.com/square/password-rotation-lambda/v2/db"
 )
 
 type MockMySQLPasswordClient struct {

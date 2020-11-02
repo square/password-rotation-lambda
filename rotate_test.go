@@ -12,9 +12,9 @@ import (
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
 	"github.com/go-test/deep"
 
-	"github.com/square/password-rotation-lambda"
-	"github.com/square/password-rotation-lambda/db"
-	"github.com/square/password-rotation-lambda/test"
+	"github.com/square/password-rotation-lambda/v2"
+	"github.com/square/password-rotation-lambda/v2/db"
+	"github.com/square/password-rotation-lambda/v2/test"
 )
 
 var (
