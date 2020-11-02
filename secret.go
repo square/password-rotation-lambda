@@ -4,7 +4,7 @@ package rotate
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"math/rand"
 	"time"
 )
@@ -34,7 +34,7 @@ type SecretSetter interface {
 	// Handler is called if the event is not from Secrets Manager (user-invoked
 	// password rotation). The event is user-defined data. After calling this method,
 	// the Lambda function is done and no other methods are called.
-	Handler(ctx context.Context, event map[string]string) error
+	Handler(ctx context.Context, event map[string]string) (map[string]string, error)
 
 	// Rotate changes the password in the secret. The method is expected to modify
 	// the secret map. The caller (Rotator) passes the same map to Credentials to
@@ -66,8 +66,8 @@ func (s RandomPassword) Init(context.Context, map[string]string) error {
 	return nil // nothing we need to do
 }
 
-func (s RandomPassword) Handler(context.Context, map[string]string) error {
-	return fmt.Errorf("RandomPassword does not support user-invoked password rotation")
+func (s RandomPassword) Handler(context.Context, map[string]string) (map[string]string, error) {
+	return nil, errors.New("RandomPassword does not support user-invoked password rotation")
 }
 
 var chars = []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-")

@@ -99,7 +99,8 @@ func TestStepCreateSecretNew(t *testing.T) {
 		"SecretId":           "def",
 		"Step":               "createSecret",
 	}
-	if err := r.Handler(context.TODO(), event); err != nil {
+	_, err := r.Handler(context.TODO(), event)
+	if err != nil {
 		t.Error(err)
 	}
 
@@ -189,7 +190,8 @@ func TestStepCreateSecretRetry(t *testing.T) {
 		"SecretId":           "def",
 		"Step":               "createSecret",
 	}
-	if err := r.Handler(context.TODO(), event); err != nil {
+	_, err := r.Handler(context.TODO(), event)
+	if err != nil {
 		t.Error(err)
 	}
 
@@ -288,7 +290,8 @@ func TestStepSetSecret(t *testing.T) {
 		"SecretId":           "def",
 		"Step":               "setSecret",
 	}
-	if err := r.Handler(context.TODO(), event); err != nil {
+	_, err := r.Handler(context.TODO(), event)
+	if err != nil {
 		t.Error(err)
 	}
 
@@ -315,7 +318,8 @@ func TestStepSetSecret(t *testing.T) {
 
 	// Then if run the step again, the number of calls to GetSecretValue
 	// should not increase because the code uses cached values:
-	if err := r.Handler(context.TODO(), event); err != nil {
+	_, err = r.Handler(context.TODO(), event)
+	if err != nil {
 		t.Error(err)
 	}
 	if nCallsToGetSecretValue != 2 {
@@ -404,7 +408,8 @@ func TestStepTestSecret(t *testing.T) {
 		"SecretId":           "def",
 		"Step":               "testSecret",
 	}
-	if err := r.Handler(context.TODO(), event); err != nil {
+	_, err := r.Handler(context.TODO(), event)
+	if err != nil {
 		t.Error(err)
 	}
 
@@ -479,7 +484,8 @@ func TestStepFinishSecret(t *testing.T) {
 		"SecretId":           "def",
 		"Step":               "finishSecret",
 	}
-	if err := r.Handler(context.TODO(), event); err != nil {
+	_, err := r.Handler(context.TODO(), event)
+	if err != nil {
 		t.Error(err)
 	}
 
@@ -490,6 +496,38 @@ func TestStepFinishSecret(t *testing.T) {
 		VersionStage:        aws.String(rotate.AWSCURRENT),
 	}
 	if diff := deep.Equal(gotUpdateInput, expectUpdateInput); diff != nil {
+		t.Log(diff)
+	}
+}
+
+func TestUserInvoke(t *testing.T) {
+	// Test that when the user invokes the lambda, not Secrets Manager, the
+	// SecretSetter.Handler method is called and its return value is returned
+
+	sm := test.MockSecretsManager{} // don't need funcs because this shouldn't be called
+
+	// Thiso is called and returned:
+	ret := map[string]string{"hello": "world"}
+	ss := test.MockSecretSetter{
+		HandlerFunc: func(ctx context.Context, event map[string]string) (map[string]string, error) {
+			return ret, nil
+		},
+	}
+
+	// Create a new Rotator to test
+	r := rotate.NewRotator(rotate.Config{
+		SecretsManager: sm,
+		SecretSetter:   ss,
+		PasswordSetter: test.MockPasswordSetter{},
+	})
+
+	// Simulate an event NOT from Secrets Manager (see InvokedBySecretsManager())
+	event := map[string]string{"knock": "knock"}
+	got, err := r.Handler(context.TODO(), event)
+	if err != nil {
+		t.Error(err)
+	}
+	if diff := deep.Equal(got, ret); diff != nil {
 		t.Log(diff)
 	}
 }

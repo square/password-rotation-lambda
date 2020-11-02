@@ -128,7 +128,7 @@ func NewRotator(cfg Config) *Rotator {
 // returned by NewRotator.
 //
 // Use only this function. The other Rotator functions are exported only for testing.
-func (r *Rotator) Handler(ctx context.Context, event map[string]string) error {
+func (r *Rotator) Handler(ctx context.Context, event map[string]string) (map[string]string, error) {
 	if !InvokedBySecretsManager(event) {
 		debug("user event: %+v", event)
 		return r.ss.Handler(ctx, event)
@@ -141,10 +141,10 @@ func (r *Rotator) Handler(ctx context.Context, event map[string]string) error {
 	// to all the db instances. These must be idempotent because we don't know
 	// if the lambda is resuming or not.
 	if err := r.ss.Init(ctx, event); err != nil {
-		return err
+		return nil, err
 	}
 	if err := r.db.Init(ctx, event); err != nil {
-		return err
+		return nil, err
 	}
 
 	r.clientRequestToken = event["ClientRequestToken"]
@@ -161,7 +161,7 @@ func (r *Rotator) Handler(ctx context.Context, event map[string]string) error {
 	case "finishSecret":
 		err = r.FinishSecret(ctx, event)
 	default:
-		return ErrInvalidStep
+		return nil, ErrInvalidStep
 	}
 
 	if err != nil {
@@ -172,7 +172,7 @@ func (r *Rotator) Handler(ctx context.Context, event map[string]string) error {
 			Error: err,
 		})
 	}
-	return err
+	return nil, err
 }
 
 // CreateSecret is the first step in the Secrets Manager rotation process.
