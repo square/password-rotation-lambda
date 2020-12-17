@@ -625,3 +625,48 @@ func TestPasswordRollback(t *testing.T) {
 		t.Error(diff)
 	}
 }
+
+func TestPasswordSetterNilEndpoint(t *testing.T) {
+	// Test that Init doesn't panic when RDS API returns a db instance with
+	// a nil Endpoint, which happens while the db is being provisioned
+	rdsClient := test.MockRDSClient{
+		DescribeDBInstancesFunc: func(input *rds.DescribeDBInstancesInput) (*rds.DescribeDBInstancesOutput, error) {
+			return &rds.DescribeDBInstancesOutput{
+				DBInstances: []*rds.DBInstance{
+					{
+						DBInstanceArn:        aws.String("arn"),
+						DBInstanceIdentifier: aws.String("db-1"),
+						// nil Endpoint
+					},
+				},
+			}, nil
+		},
+	}
+
+	// Mock the PasswordClient so we don't have to use a real MySQL/RDS instance
+	gotCreds := []db.NewPassword{}
+	gotVerified := []db.NewPassword{}
+	mysqlClient := test.MockMySQLPasswordClient{
+		SetPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			gotCreds = append(gotCreds, creds)
+			return nil
+		},
+		VerifyPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			gotVerified = append(gotVerified, creds)
+			return nil
+		},
+	}
+
+	// Create new PasswordSetter with bare minimum config
+	cfg := mysql.Config{
+		RDSClient: rdsClient,
+		DbClient:  mysqlClient,
+	}
+	ps := mysql.NewPasswordSetter(cfg)
+
+	// If it does NOT handle nil Endpoint, this will panic
+	err := ps.Init(context.TODO(), map[string]string{})
+	if err != nil {
+		t.Error(err)
+	}
+}

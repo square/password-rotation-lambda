@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/rds"
 	"github.com/aws/aws-sdk-go/service/rds/rdsiface"
 
@@ -103,12 +104,23 @@ func (m *PasswordSetter) Init(ctx context.Context, secret map[string]string) err
 	// is so the entire list of db instances appears as one log line in CloudWatch
 	// console, i.e. keeping it together makes it easier to see.
 	line := fmt.Sprintf("RDS instances:")
-	dbs := make([]dbInstance, 0, len(result.DBInstances))
+	dbs := []dbInstance{}
 	for _, rds := range result.DBInstances {
+
+		// When a db is being created, AWS returns most info but *Endpoint is nil
+		if rds.Endpoint == nil || rds.Endpoint.Address == nil {
+			dbId := aws.StringValue(rds.DBInstanceIdentifier) // aws.String() doesn't check for nil
+			log.Printf("%s has no endpoint address, skipping (probably due to in-progress provision or decommission", dbId)
+			continue
+		}
+
+		// Filter out (skip) this db instance?
 		if m.cfg.Filter != nil && m.cfg.Filter(rds) {
 			line += fmt.Sprintf("\t%s (filtered out)\n", *rds.Endpoint.Address)
 			continue
 		}
+
+		// Save db instance; include in password rotations
 		dbs = append(dbs, dbInstance{hostname: *rds.Endpoint.Address})
 		line += fmt.Sprintf(" %s", *rds.Endpoint.Address)
 	}
