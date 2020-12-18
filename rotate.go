@@ -28,7 +28,10 @@ const (
 )
 
 func init() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile | log.LUTC)
+	// Don't need data/time because CloudWatch Logs adds it, avoid redundant output:
+	//   2020-12-17T15:28:55.547-05:00	2020/12/17 20:28:55.547200 setter.go:79: Init call
+	// First timestamp from CloudWatch, second from log.
+	log.SetFlags(log.Lshortfile)
 }
 
 var (
@@ -79,6 +82,12 @@ type secret struct {
 	secret *secretsmanager.GetSecretValueOutput
 	values map[string]string
 }
+
+// Generic return error because errors are logged when/whey they occur so the log
+// output in CloudWatch Logs reads in the correct order.  Lambda logs the return
+// error last, of course, which makes it appear after "SetSecret return:" logs in
+// from defer funcs.
+var errRotationFailed = errors.New("Password rotation failed, see previous log output")
 
 // Rotator is the AWS Lambda function and handler. Create a new Rotator by
 // calling NewRotator, then use it in your main.go by calling lambda.Start(r.Handler)
@@ -389,22 +398,18 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		Step: "setSecret",
 		Time: r.startTime,
 	})
-	if err1 := r.db.SetPassword(ctx, creds); err1 != nil {
-
+	if err := r.db.SetPassword(ctx, creds); err != nil {
 		// Roll back to original password since setting the new password failed.
 		// Depending on how the PasswordSetter is configured, this might be a no-op.
 		// Normally, we want to roll back so all dbs instances have the same
 		// password for the given user.
+		log.Printf("ERROR: SetPassword failed, rollback: %s", err)
 		r.event.Receive(Event{
 			Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
 			Step: "setSecret",
 			Time: time.Now(),
 		})
-		if err2 := r.db.Rollback(ctx, creds); err2 != nil {
-			return fmt.Errorf("setting new password and rollback failed: %v (rollback error: %v)", err1, err2)
-		}
-
-		return fmt.Errorf("setting new password failed, rollback successful: %v", err1)
+		return r.rollback(ctx, creds, "SetSecret")
 	}
 	r.event.Receive(Event{
 		Name: EVENT_END_PASSWORD_ROTATION,
@@ -469,19 +474,15 @@ func (r *Rotator) TestSecret(ctx context.Context, event map[string]string) error
 		Step: "testSecret",
 		Time: time.Now(),
 	})
-	if err1 := r.db.VerifyPassword(ctx, creds); err1 != nil {
-
+	if err := r.db.VerifyPassword(ctx, creds); err != nil {
 		// Roll back to original password since new password doesn't work
+		log.Printf("ERROR: VerifyPassword failed, rollback: %s", err)
 		r.event.Receive(Event{
 			Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
 			Step: "testSecret",
 			Time: time.Now(),
 		})
-		if err2 := r.db.Rollback(ctx, creds); err2 != nil {
-			return fmt.Errorf("verifying new password and rollback failed: %v (rollback error: %v)", err1, err2)
-		}
-
-		return fmt.Errorf("verifying new password failed, rollback successful: %v", err1)
+		return r.rollback(ctx, creds, "TestSecret")
 	}
 	r.event.Receive(Event{
 		Name: EVENT_END_PASSWORD_VERIFICATION,
@@ -611,6 +612,35 @@ func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput,
 		values: v,
 	}
 	return s, v, nil
+}
+
+func (r *Rotator) rollback(ctx context.Context, creds db.NewPassword, rotationStep string) error {
+	if err := r.db.Rollback(ctx, creds); err != nil {
+		log.Printf("ERROR: Rollback failed: %s", err)
+		return errRotationFailed
+	}
+
+	// Remove pending secret and clear the cache, i.e. roll back Secrets Manager
+	// to point before this rotation
+	newSecret, _, err := r.getSecret(AWSPENDING)
+	if err != nil {
+		return err
+	}
+	debug("removing AWSPENDING from version id = %v", *newSecret.VersionId)
+	_, err = r.sm.UpdateSecretVersionStage(&secretsmanager.UpdateSecretVersionStageInput{
+		SecretId:            aws.String(r.secretId),
+		RemoveFromVersionId: newSecret.VersionId,
+		VersionStage:        aws.String(AWSPENDING),
+	})
+	if err != nil {
+		log.Printf("ERROR: failed to remove pending secret: %s", err)
+		return errRotationFailed
+	}
+	r.secrets = map[string]secret{} // clear the cache
+
+	log.Printf("%s failed but rollback was successful", rotationStep)
+
+	return errRotationFailed // always return this error
 }
 
 // --------------------------------------------------------------------------

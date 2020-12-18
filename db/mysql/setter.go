@@ -228,8 +228,11 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, actio
 			creds.Current.Hostname = m.dbs[dbNo].hostname
 			creds.New.Hostname = m.dbs[dbNo].hostname
 
+			// --------------------------------------------------------------
+			// Try to set/verify/rollback MySQL user password
 			if err := m.setOne(ctx, creds, action); err != nil {
-				log.Printf("%s: error %s password: %s", m.dbs[dbNo].hostname, action, err)
+				log.Printf("ERROR: %s: %s password failed: %s", m.dbs[dbNo].hostname, action, err)
+
 				switch action {
 				case set_password:
 					m.dbs[dbNo].setError = err
@@ -240,9 +243,11 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, actio
 				default:
 					panic("invalid action passed to setAll: " + action)
 				}
-				return
+
+				return // Failed to set/verify/rollback
 			}
 
+			// Success, mark that set/verify/rollback was ok
 			log.Printf("%s: success %s password", m.dbs[dbNo].hostname, action)
 			switch action {
 			case set_password:
@@ -262,12 +267,25 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, actio
 	wg.Wait()
 
 	// Return error if any database failed to set
+	errCount := 0
 	for _, db := range m.dbs {
-		if db.set && db.setError == nil {
-			continue
+		switch action {
+		case set_password:
+			if db.setError != nil {
+				errCount += 1
+			}
+		case verify_password:
+			if db.verifyError != nil {
+				errCount += 1
+			}
+		case rollback_password:
+			if db.rollbackError != nil {
+				errCount += 1
+			}
 		}
-		return fmt.Errorf("%s password failed on at least one database (%s),"+
-			" see previous log output for 'error %s password'", action, db.hostname, action)
+	}
+	if errCount > 0 {
+		return fmt.Errorf("%s failed on %d database instances, see previous log output", action, errCount)
 	}
 
 	return nil
