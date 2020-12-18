@@ -213,11 +213,6 @@ func TestStepSetSecret(t *testing.T) {
 	// Test that the "setSecret" step gets both secrets (current and pending),
 	// gets the db creds from pending, and sets them via PasswordSetter. This is
 	// the second step in the four-step process.
-	//
-	// Note: if the func is not stopped after 1st step (which Lambda may or may not
-	// do), then 2nd step will used cached pending secret value from first step.
-	// But we haven't called first step, so our mock Secrets Manager client will
-	// get two calls.
 	var updateSecretVersionCalled bool
 	var nCallsToGetSecretValue int
 
@@ -322,8 +317,8 @@ func TestStepSetSecret(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	if nCallsToGetSecretValue != 2 {
-		t.Errorf("GetSecretValue called %d times, expected 2", nCallsToGetSecretValue)
+	if nCallsToGetSecretValue != 4 {
+		t.Errorf("GetSecretValue called %d times, expected 4", nCallsToGetSecretValue)
 	}
 }
 

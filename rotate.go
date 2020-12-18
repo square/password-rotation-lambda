@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -77,12 +76,6 @@ func InvokedBySecretsManager(event map[string]string) bool {
 	return haveToken && haveSecretId && haveStep
 }
 
-// secret is an internal struct for caching the secret. See func getSecret.
-type secret struct {
-	secret *secretsmanager.GetSecretValueOutput
-	values map[string]string
-}
-
 // Generic return error because errors are logged when/whey they occur so the log
 // output in CloudWatch Logs reads in the correct order.  Lambda logs the return
 // error last, of course, which makes it appear after "SetSecret return:" logs in
@@ -104,7 +97,6 @@ type Rotator struct {
 	// --
 	clientRequestToken string
 	secretId           string
-	secrets            map[string]secret
 	startTime          time.Time
 }
 
@@ -127,8 +119,6 @@ func NewRotator(cfg Config) *Rotator {
 		ss:     ss,
 		event:  event,
 		skipDb: cfg.SkipDatabase,
-		// --
-		secrets: map[string]secret{},
 	}
 }
 
@@ -232,9 +222,6 @@ func (r *Rotator) CreateSecret(ctx context.Context, event map[string]string) err
 		Step: "createSecret",
 		Time: time.Now(),
 	})
-
-	// Clear the cache on first step, always start with actual values
-	r.secrets = map[string]secret{}
 
 	// Get current secret
 	curSec, curVals, err := r.getSecret(AWSCURRENT)
@@ -550,9 +537,6 @@ func (r *Rotator) FinishSecret(ctx context.Context, event map[string]string) err
 		log.Println(err)
 	}
 
-	// Clear the cache on success
-	r.secrets = map[string]secret{}
-
 	r.event.Receive(Event{
 		Name: EVENT_END_ROTATION,
 		Step: "finishSecret",
@@ -565,18 +549,6 @@ func (r *Rotator) FinishSecret(ctx context.Context, event map[string]string) err
 // --------------------------------------------------------------------------
 
 func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput, map[string]string, error) {
-	// Returned cached secret for this stage, if set
-	if s, ok := r.secrets[stage]; ok {
-		// DO NOT use s.secret.String() because it prints the raw secret string
-		stages := make([]string, len(s.secret.VersionStages))
-		for i, s := range s.secret.VersionStages {
-			stages[i] = *s
-		}
-		debug("using cached %s secret: version id = %s, stages = %v, created %s",
-			stage, *s.secret.VersionId, strings.Join(stages, ", "), *s.secret.CreatedDate)
-		return s.secret, s.values, nil
-	}
-
 	debug("getting %s secret id %v", stage, r.secretId)
 
 	// Fetch secret from Secrets Manager
@@ -604,13 +576,6 @@ func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput,
 			"it must be valid JSON like '{\"username\":\"foo\",\"password\":\"bar\"}'")
 	}
 
-	// Cache the secret and its values because other steps re-fetch them,
-	// and we want to make as few AWS API calls as possible to save time
-	// and money
-	r.secrets[stage] = secret{
-		secret: s,
-		values: v,
-	}
 	return s, v, nil
 }
 
@@ -636,7 +601,6 @@ func (r *Rotator) rollback(ctx context.Context, creds db.NewPassword, rotationSt
 		log.Printf("ERROR: failed to remove pending secret: %s", err)
 		return errRotationFailed
 	}
-	r.secrets = map[string]secret{} // clear the cache
 
 	log.Printf("%s failed but rollback was successful", rotationStep)
 
