@@ -228,8 +228,6 @@ func (r *Rotator) CreateSecret(ctx context.Context, event map[string]string) err
 	if err != nil {
 		return err
 	}
-	debug("current secret version id = %s", *curSec.VersionId)
-	debugSecret("current secret values: %v", curVals)
 
 	// Case 4:
 	// Is our secret the current secret? It shouldn't be.
@@ -255,7 +253,7 @@ func (r *Rotator) CreateSecret(ctx context.Context, event map[string]string) err
 	// If there is a pending secret and it's ours (due to a retry), then we'll
 	// use its values and not rotate.
 	if !currentHasPending {
-		penSec, penVals, err := r.getSecret(AWSPENDING)
+		penSec, _, err := r.getSecret(AWSPENDING)
 		if err != nil {
 			if aerr, ok := err.(awserr.Error); ok && aerr.Code() == secretsmanager.ErrCodeResourceNotFoundException {
 				// *** The simplest case ***
@@ -272,7 +270,6 @@ func (r *Rotator) CreateSecret(ctx context.Context, event map[string]string) err
 				// We do not and cannot rotate the values, else PutSecretValue
 				// will error. It's only idempotent with the same values.
 				debug("using pending secret, will not rotate")
-				debugSecret("pending secret values: %v", penVals)
 
 				// Return early, nothing more to do. Code below is for rotating
 				// current values, but we already did that in previous try.
@@ -549,8 +546,6 @@ func (r *Rotator) FinishSecret(ctx context.Context, event map[string]string) err
 // --------------------------------------------------------------------------
 
 func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput, map[string]string, error) {
-	debug("getting %s secret id %v", stage, r.secretId)
-
 	// Fetch secret from Secrets Manager
 	s, err := r.sm.GetSecretValue(&secretsmanager.GetSecretValueInput{
 		SecretId:     aws.String(r.secretId),
@@ -559,8 +554,7 @@ func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput,
 	if err != nil {
 		return nil, nil, err
 	}
-
-	debugSecret("raw secret string: %v", *s.SecretString)
+	debug("%s stage %s version %v", r.secretId, stage, *s.VersionId)
 
 	if s.SecretString == nil || *s.SecretString == "" {
 		return s, nil, fmt.Errorf("secret string is nil or empty string; " +
@@ -575,6 +569,7 @@ func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput,
 		return s, nil, fmt.Errorf("secret string is 'null' literal; " +
 			"it must be valid JSON like '{\"username\":\"foo\",\"password\":\"bar\"}'")
 	}
+	debugSecret("%s secret values: %v", stage, *s.SecretString)
 
 	return s, v, nil
 }
