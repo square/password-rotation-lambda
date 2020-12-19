@@ -110,7 +110,7 @@ func (m *PasswordSetter) Init(ctx context.Context, secret map[string]string) err
 		// When a db is being created, AWS returns most info but *Endpoint is nil
 		if rds.Endpoint == nil || rds.Endpoint.Address == nil {
 			dbId := aws.StringValue(rds.DBInstanceIdentifier) // aws.String() doesn't check for nil
-			log.Printf("%s has no endpoint address, skipping (probably due to in-progress provision or decommission", dbId)
+			log.Printf("%s has no endpoint address, skipping (database instance is being provisioned or decommissioned)", dbId)
 			continue
 		}
 
