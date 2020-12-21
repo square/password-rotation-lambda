@@ -2,6 +2,12 @@
 
 ## v2.0
 
+### v2.0.2 (2020-12-21)
+
+* Fix rollback
+* Fix concurrent execution by removing cache
+* Improve log and debug output
+
 ### v2.0.1 (2020-12-17)
 
 * Fix panic on nil RDS Endpoint (when db instance is being provisioned) in mysql/setter.go

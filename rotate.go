@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -28,7 +27,10 @@ const (
 )
 
 func init() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile | log.LUTC)
+	// Don't need data/time because CloudWatch Logs adds it, avoid redundant output:
+	//   2020-12-17T15:28:55.547-05:00	2020/12/17 20:28:55.547200 setter.go:79: Init call
+	// First timestamp from CloudWatch, second from log.
+	log.SetFlags(log.Lshortfile)
 }
 
 var (
@@ -74,11 +76,11 @@ func InvokedBySecretsManager(event map[string]string) bool {
 	return haveToken && haveSecretId && haveStep
 }
 
-// secret is an internal struct for caching the secret. See func getSecret.
-type secret struct {
-	secret *secretsmanager.GetSecretValueOutput
-	values map[string]string
-}
+// Generic return error because errors are logged when/whey they occur so the log
+// output in CloudWatch Logs reads in the correct order.  Lambda logs the return
+// error last, of course, which makes it appear after "SetSecret return:" logs in
+// from defer funcs.
+var errRotationFailed = errors.New("Password rotation failed, see previous log output")
 
 // Rotator is the AWS Lambda function and handler. Create a new Rotator by
 // calling NewRotator, then use it in your main.go by calling lambda.Start(r.Handler)
@@ -95,7 +97,6 @@ type Rotator struct {
 	// --
 	clientRequestToken string
 	secretId           string
-	secrets            map[string]secret
 	startTime          time.Time
 }
 
@@ -118,8 +119,6 @@ func NewRotator(cfg Config) *Rotator {
 		ss:     ss,
 		event:  event,
 		skipDb: cfg.SkipDatabase,
-		// --
-		secrets: map[string]secret{},
 	}
 }
 
@@ -224,16 +223,11 @@ func (r *Rotator) CreateSecret(ctx context.Context, event map[string]string) err
 		Time: time.Now(),
 	})
 
-	// Clear the cache on first step, always start with actual values
-	r.secrets = map[string]secret{}
-
 	// Get current secret
 	curSec, curVals, err := r.getSecret(AWSCURRENT)
 	if err != nil {
 		return err
 	}
-	debug("current secret version id = %s", *curSec.VersionId)
-	debugSecret("current secret values: %v", curVals)
 
 	// Case 4:
 	// Is our secret the current secret? It shouldn't be.
@@ -259,7 +253,7 @@ func (r *Rotator) CreateSecret(ctx context.Context, event map[string]string) err
 	// If there is a pending secret and it's ours (due to a retry), then we'll
 	// use its values and not rotate.
 	if !currentHasPending {
-		penSec, penVals, err := r.getSecret(AWSPENDING)
+		penSec, _, err := r.getSecret(AWSPENDING)
 		if err != nil {
 			if aerr, ok := err.(awserr.Error); ok && aerr.Code() == secretsmanager.ErrCodeResourceNotFoundException {
 				// *** The simplest case ***
@@ -276,7 +270,6 @@ func (r *Rotator) CreateSecret(ctx context.Context, event map[string]string) err
 				// We do not and cannot rotate the values, else PutSecretValue
 				// will error. It's only idempotent with the same values.
 				debug("using pending secret, will not rotate")
-				debugSecret("pending secret values: %v", penVals)
 
 				// Return early, nothing more to do. Code below is for rotating
 				// current values, but we already did that in previous try.
@@ -389,22 +382,18 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		Step: "setSecret",
 		Time: r.startTime,
 	})
-	if err1 := r.db.SetPassword(ctx, creds); err1 != nil {
-
+	if err := r.db.SetPassword(ctx, creds); err != nil {
 		// Roll back to original password since setting the new password failed.
 		// Depending on how the PasswordSetter is configured, this might be a no-op.
 		// Normally, we want to roll back so all dbs instances have the same
 		// password for the given user.
+		log.Printf("ERROR: SetPassword failed, rollback: %s", err)
 		r.event.Receive(Event{
 			Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
 			Step: "setSecret",
 			Time: time.Now(),
 		})
-		if err2 := r.db.Rollback(ctx, creds); err2 != nil {
-			return fmt.Errorf("setting new password and rollback failed: %v (rollback error: %v)", err1, err2)
-		}
-
-		return fmt.Errorf("setting new password failed, rollback successful: %v", err1)
+		return r.rollback(ctx, creds, "SetSecret")
 	}
 	r.event.Receive(Event{
 		Name: EVENT_END_PASSWORD_ROTATION,
@@ -469,19 +458,15 @@ func (r *Rotator) TestSecret(ctx context.Context, event map[string]string) error
 		Step: "testSecret",
 		Time: time.Now(),
 	})
-	if err1 := r.db.VerifyPassword(ctx, creds); err1 != nil {
-
+	if err := r.db.VerifyPassword(ctx, creds); err != nil {
 		// Roll back to original password since new password doesn't work
+		log.Printf("ERROR: VerifyPassword failed, rollback: %s", err)
 		r.event.Receive(Event{
 			Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
 			Step: "testSecret",
 			Time: time.Now(),
 		})
-		if err2 := r.db.Rollback(ctx, creds); err2 != nil {
-			return fmt.Errorf("verifying new password and rollback failed: %v (rollback error: %v)", err1, err2)
-		}
-
-		return fmt.Errorf("verifying new password failed, rollback successful: %v", err1)
+		return r.rollback(ctx, creds, "TestSecret")
 	}
 	r.event.Receive(Event{
 		Name: EVENT_END_PASSWORD_VERIFICATION,
@@ -549,9 +534,6 @@ func (r *Rotator) FinishSecret(ctx context.Context, event map[string]string) err
 		log.Println(err)
 	}
 
-	// Clear the cache on success
-	r.secrets = map[string]secret{}
-
 	r.event.Receive(Event{
 		Name: EVENT_END_ROTATION,
 		Step: "finishSecret",
@@ -564,20 +546,6 @@ func (r *Rotator) FinishSecret(ctx context.Context, event map[string]string) err
 // --------------------------------------------------------------------------
 
 func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput, map[string]string, error) {
-	// Returned cached secret for this stage, if set
-	if s, ok := r.secrets[stage]; ok {
-		// DO NOT use s.secret.String() because it prints the raw secret string
-		stages := make([]string, len(s.secret.VersionStages))
-		for i, s := range s.secret.VersionStages {
-			stages[i] = *s
-		}
-		debug("using cached %s secret: version id = %s, stages = %v, created %s",
-			stage, *s.secret.VersionId, strings.Join(stages, ", "), *s.secret.CreatedDate)
-		return s.secret, s.values, nil
-	}
-
-	debug("getting %s secret id %v", stage, r.secretId)
-
 	// Fetch secret from Secrets Manager
 	s, err := r.sm.GetSecretValue(&secretsmanager.GetSecretValueInput{
 		SecretId:     aws.String(r.secretId),
@@ -586,8 +554,7 @@ func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput,
 	if err != nil {
 		return nil, nil, err
 	}
-
-	debugSecret("raw secret string: %v", *s.SecretString)
+	debug("%s stage %s version %v", r.secretId, stage, *s.VersionId)
 
 	if s.SecretString == nil || *s.SecretString == "" {
 		return s, nil, fmt.Errorf("secret string is nil or empty string; " +
@@ -602,15 +569,37 @@ func (r *Rotator) getSecret(stage string) (*secretsmanager.GetSecretValueOutput,
 		return s, nil, fmt.Errorf("secret string is 'null' literal; " +
 			"it must be valid JSON like '{\"username\":\"foo\",\"password\":\"bar\"}'")
 	}
+	debugSecret("%s secret values: %v", stage, *s.SecretString)
 
-	// Cache the secret and its values because other steps re-fetch them,
-	// and we want to make as few AWS API calls as possible to save time
-	// and money
-	r.secrets[stage] = secret{
-		secret: s,
-		values: v,
-	}
 	return s, v, nil
+}
+
+func (r *Rotator) rollback(ctx context.Context, creds db.NewPassword, rotationStep string) error {
+	if err := r.db.Rollback(ctx, creds); err != nil {
+		log.Printf("ERROR: Rollback failed: %s", err)
+		return errRotationFailed
+	}
+
+	// Remove pending secret and clear the cache, i.e. roll back Secrets Manager
+	// to point before this rotation
+	newSecret, _, err := r.getSecret(AWSPENDING)
+	if err != nil {
+		return err
+	}
+	debug("removing AWSPENDING from version id = %v", *newSecret.VersionId)
+	_, err = r.sm.UpdateSecretVersionStage(&secretsmanager.UpdateSecretVersionStageInput{
+		SecretId:            aws.String(r.secretId),
+		RemoveFromVersionId: newSecret.VersionId,
+		VersionStage:        aws.String(AWSPENDING),
+	})
+	if err != nil {
+		log.Printf("ERROR: failed to remove pending secret: %s", err)
+		return errRotationFailed
+	}
+
+	log.Printf("%s failed but rollback was successful", rotationStep)
+
+	return errRotationFailed // always return this error
 }
 
 // --------------------------------------------------------------------------
