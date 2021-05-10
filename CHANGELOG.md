@@ -2,6 +2,10 @@
 
 ## v2.0
 
+### v2.0.3 (2021-05-05)
+
+* rotate.RandomPassword is configurable
+
 ### v2.0.2 (2020-12-21)
 
 * Fix rollback
