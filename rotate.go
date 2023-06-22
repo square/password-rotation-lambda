@@ -672,7 +672,7 @@ var (
 
 	// DEFAULT_REPLICATION_WAIT_DURATION is the default duration that password rotation lambda will
 	// wait for secret replication to secondary regions to complete
-	DEFAULT_REPLICATION_WAIT_DURATION = 10 * time.Second
+	DEFAULT_REPLICATION_WAIT_DURATION = 30 * time.Second
 )
 
 func debugSecret(msg string, v ...interface{}) {
