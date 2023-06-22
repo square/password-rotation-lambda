@@ -67,9 +67,9 @@ type Config struct {
 	// If none is provided, NullEventReceiver is used. See EventReceiver for more details.
 	EventReceiver EventReceiver
 
-	// ReplicationWaitDuration governs the duration password rotation lambda will wait for
+	// ReplicationWait governs the duration password rotation lambda will wait for
 	// secret replication to secondary regions to complete
-	ReplicationWaitDuration time.Duration
+	ReplicationWait time.Duration
 }
 
 // InvokedBySecretsManager returns true if the event is from Secrets Manager.
@@ -99,10 +99,10 @@ type Rotator struct {
 	event  EventReceiver
 	skipDb bool
 	// --
-	clientRequestToken      string
-	secretId                string
-	startTime               time.Time
-	replicationWaitDuration time.Duration
+	clientRequestToken string
+	secretId           string
+	startTime          time.Time
+	replicationWait    time.Duration
 }
 
 // NewRotator creates a new Rotator.
@@ -119,12 +119,12 @@ func NewRotator(cfg Config) *Rotator {
 		ss = RandomPassword{}
 	}
 	return &Rotator{
-		sm:                      cfg.SecretsManager,
-		db:                      cfg.PasswordSetter,
-		ss:                      ss,
-		event:                   event,
-		skipDb:                  cfg.SkipDatabase,
-		replicationWaitDuration: cfg.ReplicationWaitDuration,
+		sm:              cfg.SecretsManager,
+		db:              cfg.PasswordSetter,
+		ss:              ss,
+		event:           event,
+		skipDb:          cfg.SkipDatabase,
+		replicationWait: cfg.ReplicationWait,
 	}
 }
 
@@ -620,9 +620,9 @@ func (r *Rotator) rollback(ctx context.Context, creds db.NewPassword, rotationSt
 // stuck indefinitely.
 func (r *Rotator) checkSecretReplicationStatus() error {
 	log.Println("checking secret replication status")
-	waitDuration := DEFAULT_REPLICATION_WAIT_DURATION
-	if r.replicationWaitDuration > 0 {
-		waitDuration = r.replicationWaitDuration
+	waitDuration := DEFAULT_REPLICATION_WAIT
+	if r.replicationWait > 0 {
+		waitDuration = r.replicationWait
 	}
 
 	startTime := time.Now()
@@ -670,9 +670,9 @@ var (
 
 	debugLog = log.New(os.Stderr, "DEBUG ", log.LstdFlags|log.Lmicroseconds|log.Lshortfile|log.LUTC)
 
-	// DEFAULT_REPLICATION_WAIT_DURATION is the default duration that password rotation lambda will
+	// DEFAULT_REPLICATION_WAIT is the default duration that password rotation lambda will
 	// wait for secret replication to secondary regions to complete
-	DEFAULT_REPLICATION_WAIT_DURATION = 30 * time.Second
+	DEFAULT_REPLICATION_WAIT = 30 * time.Second
 )
 
 func debugSecret(msg string, v ...interface{}) {

@@ -556,10 +556,10 @@ func TestStepFinishSecretFailure(t *testing.T) {
 	startTime := time.Now()
 	// Create a new Rotator to test
 	r := rotate.NewRotator(rotate.Config{
-		SecretsManager:          sm,
-		SecretSetter:            test.MockSecretSetter{},
-		PasswordSetter:          test.MockPasswordSetter{},
-		ReplicationWaitDuration: retryWait,
+		SecretsManager:  sm,
+		SecretSetter:    test.MockSecretSetter{},
+		PasswordSetter:  test.MockPasswordSetter{},
+		ReplicationWait: retryWait,
 	})
 
 	// Simulate testSecret event from Secrets Manager
