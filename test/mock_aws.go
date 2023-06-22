@@ -14,6 +14,7 @@ type MockSecretsManager struct {
 	GetSecretValueFunc           func(*secretsmanager.GetSecretValueInput) (*secretsmanager.GetSecretValueOutput, error)
 	PutSecretValueFunc           func(*secretsmanager.PutSecretValueInput) (*secretsmanager.PutSecretValueOutput, error)
 	UpdateSecretVersionStageFunc func(*secretsmanager.UpdateSecretVersionStageInput) (*secretsmanager.UpdateSecretVersionStageOutput, error)
+	DescribeSecretFunc           func(input *secretsmanager.DescribeSecretInput) (*secretsmanager.DescribeSecretOutput, error)
 }
 
 func (m MockSecretsManager) GetSecretValue(input *secretsmanager.GetSecretValueInput) (*secretsmanager.GetSecretValueOutput, error) {
@@ -33,6 +34,13 @@ func (m MockSecretsManager) PutSecretValue(input *secretsmanager.PutSecretValueI
 func (m MockSecretsManager) UpdateSecretVersionStage(input *secretsmanager.UpdateSecretVersionStageInput) (*secretsmanager.UpdateSecretVersionStageOutput, error) {
 	if m.UpdateSecretVersionStageFunc != nil {
 		return m.UpdateSecretVersionStageFunc(input)
+	}
+	return nil, nil
+}
+
+func (m MockSecretsManager) DescribeSecret(input *secretsmanager.DescribeSecretInput) (*secretsmanager.DescribeSecretOutput, error) {
+	if m.DescribeSecretFunc != nil {
+		return m.DescribeSecretFunc(input)
 	}
 	return nil, nil
 }
