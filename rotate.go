@@ -643,7 +643,7 @@ func (r *Rotator) checkSecretReplicationStatus() error {
 			}
 			if *status.Status != secretsmanager.StatusTypeInSync {
 				replicationSyncComplete = false
-				log.Printf("replication status still in (%v) in region (%v) expecting (%v)\n", *status.Status, status.Region, secretsmanager.StatusTypeInSync)
+				log.Printf("replication status still in (%v) in region (%v) expecting (%v)\n", *status.Status, *status.Region, secretsmanager.StatusTypeInSync)
 			}
 		}
 		if replicationSyncComplete {
