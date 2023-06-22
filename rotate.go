@@ -640,11 +640,13 @@ func (r *Rotator) checkSecretReplicationStatus() error {
 		for _, status := range secret.ReplicationStatus {
 			if status == nil {
 				replicationSyncComplete = false
+				log.Println("encountered null replication status")
 				break
 			}
 			if *status.Status != secretsmanager.StatusTypeInSync {
 				replicationSyncComplete = false
 				log.Printf("replication status still in (%v) in region (%v) expecting (%v)\n", *status.Status, *status.Region, secretsmanager.StatusTypeInSync)
+				break
 			}
 		}
 		// only return success if all secret replica regions are in sync all
