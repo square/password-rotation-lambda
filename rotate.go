@@ -67,12 +67,8 @@ type Config struct {
 	// If none is provided, NullEventReceiver is used. See EventReceiver for more details.
 	EventReceiver EventReceiver
 
-	// ReplicationWaitRetries governs how many times password rotation lambda
-	// will retry waiting for secret replication to secondary region to become in sync
-	ReplicationWaitRetries int
-
-	// ReplicationWaitDuration governs the duration password rotation lambda will wait
-	// between retries of checking for secret replication status to secondary regions
+	// ReplicationWaitDuration governs the duration password rotation lambda will wait for
+	// secret replication to secondary regions to complete
 	ReplicationWaitDuration time.Duration
 }
 
@@ -106,7 +102,6 @@ type Rotator struct {
 	clientRequestToken      string
 	secretId                string
 	startTime               time.Time
-	replicationWaitRetries  int
 	replicationWaitDuration time.Duration
 }
 
@@ -129,7 +124,6 @@ func NewRotator(cfg Config) *Rotator {
 		ss:                      ss,
 		event:                   event,
 		skipDb:                  cfg.SkipDatabase,
-		replicationWaitRetries:  cfg.ReplicationWaitRetries,
 		replicationWaitDuration: cfg.ReplicationWaitDuration,
 	}
 }
@@ -627,23 +621,26 @@ func (r *Rotator) rollback(ctx context.Context, creds db.NewPassword, rotationSt
 func (r *Rotator) checkSecretReplicationStatus() error {
 	log.Println("checking secret replication status")
 	waitDuration := DEFAULT_REPLICATION_WAIT_DURATION
-	retries := DEFAULT_REPLICATION_WAIT_RETRIES
-	if r.replicationWaitRetries > 0 {
-		retries = r.replicationWaitRetries
-	}
 	if r.replicationWaitDuration > 0 {
 		waitDuration = r.replicationWaitDuration
 	}
 
-	for i := 0; i < retries; i++ {
+	startTime := time.Now()
+	for time.Now().Sub(startTime) < waitDuration {
 		secret, err := r.sm.DescribeSecret(&secretsmanager.DescribeSecretInput{
 			SecretId: aws.String(r.secretId),
 		})
 		if err != nil {
 			return err
 		}
+		if secret == nil {
+			return fmt.Errorf("expected an non null secret for secretId %v but received null", r.secretId)
+		}
 		replicationSyncComplete := true
 		for _, status := range secret.ReplicationStatus {
+			if status == nil {
+				continue
+			}
 			if *status.Status != secretsmanager.StatusTypeInSync {
 				replicationSyncComplete = false
 				log.Printf("replication status still in (%v) in region (%v) expecting (%v)\n", *status.Status, status.Region, secretsmanager.StatusTypeInSync)
@@ -653,9 +650,9 @@ func (r *Rotator) checkSecretReplicationStatus() error {
 			log.Println("secret replication sync completed successfully")
 			return nil
 		}
-		time.Sleep(waitDuration)
+		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("secret replication sync is stuck")
+	return fmt.Errorf("timeout waiting for secret replication StatusTypeInSync = true")
 }
 
 // --------------------------------------------------------------------------
@@ -673,15 +670,9 @@ var (
 
 	debugLog = log.New(os.Stderr, "DEBUG ", log.LstdFlags|log.Lmicroseconds|log.Lshortfile|log.LUTC)
 
-	// DEFAULT_REPLICATION_WAIT_RETRIES governs how many times password rotation lambda
-	// will retry waiting for secret replication to secondary region to become in sync
-	// if a relevant config is not passed
-	DEFAULT_REPLICATION_WAIT_RETRIES = 2
-
-	// DEFAULT_REPLICATION_WAIT_DURATION governs the duration password rotation lambda will wait
-	// between retries of checking for secret replication status to secondary regions
-	// if a relevant config is not passed
-	DEFAULT_REPLICATION_WAIT_DURATION = 5 * time.Second
+	// DEFAULT_REPLICATION_WAIT_DURATION is the default duration that password rotation lambda will
+	// wait for secret replication to secondary regions to complete
+	DEFAULT_REPLICATION_WAIT_DURATION = 10 * time.Second
 )
 
 func debugSecret(msg string, v ...interface{}) {

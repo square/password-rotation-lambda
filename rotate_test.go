@@ -509,9 +509,8 @@ func TestStepFinishSecret(t *testing.T) {
 func TestStepFinishSecretFailure(t *testing.T) {
 	// Test that finish secret fails when describesecret replication status
 	// does not go to InSync
-	retries := 3
 	retryWait := 1 * time.Second
-	expectedTestDuration := 3 * time.Second
+
 	sm := test.MockSecretsManager{
 		GetSecretValueFunc: func(input *secretsmanager.GetSecretValueInput) (*secretsmanager.GetSecretValueOutput, error) {
 			switch *input.VersionStage {
@@ -561,7 +560,6 @@ func TestStepFinishSecretFailure(t *testing.T) {
 		SecretSetter:            test.MockSecretSetter{},
 		PasswordSetter:          test.MockPasswordSetter{},
 		ReplicationWaitDuration: retryWait,
-		ReplicationWaitRetries:  retries,
 	})
 
 	// Simulate testSecret event from Secrets Manager
@@ -579,8 +577,8 @@ func TestStepFinishSecretFailure(t *testing.T) {
 
 	finishTime := time.Now()
 	testDuration := finishTime.Sub(startTime)
-	if testDuration < expectedTestDuration {
-		t.Errorf("expected test to take %v duration but it finished in %v", expectedTestDuration, testDuration)
+	if testDuration < retryWait {
+		t.Errorf("expected test to take %v duration but it finished in %v", retryWait, testDuration)
 	}
 }
 
