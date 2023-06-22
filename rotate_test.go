@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/secretsmanager"
 	"github.com/go-test/deep"
 
-	"github.com/square/password-rotation-lambda/v2"
+	rotate "github.com/square/password-rotation-lambda/v2"
 	"github.com/square/password-rotation-lambda/v2/db"
 	"github.com/square/password-rotation-lambda/v2/test"
 )
@@ -432,6 +432,7 @@ func TestStepFinishSecret(t *testing.T) {
 	// calls UpdateSecretVersionStage to move the current label to the pending
 	// secret by ID.
 	var gotUpdateInput *secretsmanager.UpdateSecretVersionStageInput
+	var gotDescribeInput *secretsmanager.DescribeSecretInput
 	sm := test.MockSecretsManager{
 		GetSecretValueFunc: func(input *secretsmanager.GetSecretValueInput) (*secretsmanager.GetSecretValueOutput, error) {
 			switch *input.VersionStage {
@@ -464,6 +465,10 @@ func TestStepFinishSecret(t *testing.T) {
 				Name: aws.String("sercetName"),
 			}, nil
 		},
+		DescribeSecretFunc: func(input *secretsmanager.DescribeSecretInput) (*secretsmanager.DescribeSecretOutput, error) {
+			gotDescribeInput = input
+			return &secretsmanager.DescribeSecretOutput{}, nil
+		},
 	}
 
 	// Create a new Rotator to test
@@ -492,6 +497,88 @@ func TestStepFinishSecret(t *testing.T) {
 	}
 	if diff := deep.Equal(gotUpdateInput, expectUpdateInput); diff != nil {
 		t.Log(diff)
+	}
+	expectedDescribeInput := &secretsmanager.DescribeSecretInput{
+		SecretId: aws.String("def"),
+	}
+	if diff := deep.Equal(expectedDescribeInput, gotDescribeInput); diff != nil {
+		t.Log(diff)
+	}
+}
+
+func TestStepFinishSecretFailure(t *testing.T) {
+	// Test that finish secret fails when describesecret replication status
+	// does not go to InSync
+	retryWait := 1 * time.Second
+
+	sm := test.MockSecretsManager{
+		GetSecretValueFunc: func(input *secretsmanager.GetSecretValueInput) (*secretsmanager.GetSecretValueOutput, error) {
+			switch *input.VersionStage {
+			case rotate.AWSCURRENT:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString1,
+					VersionId:     aws.String("v1"),
+					VersionStages: []*string{aws.String(rotate.AWSCURRENT)},
+					CreatedDate:   &now,
+				}, nil
+			case rotate.AWSPENDING:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString2,
+					VersionId:     aws.String("v2"),
+					VersionStages: []*string{aws.String(rotate.AWSPENDING)},
+					CreatedDate:   &now,
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+		UpdateSecretVersionStageFunc: func(input *secretsmanager.UpdateSecretVersionStageInput) (*secretsmanager.UpdateSecretVersionStageOutput, error) {
+			return &secretsmanager.UpdateSecretVersionStageOutput{
+				ARN:  aws.String("arn"),
+				Name: aws.String("sercetName"),
+			}, nil
+		},
+		DescribeSecretFunc: func(input *secretsmanager.DescribeSecretInput) (*secretsmanager.DescribeSecretOutput, error) {
+			return &secretsmanager.DescribeSecretOutput{
+				ReplicationStatus: []*secretsmanager.ReplicationStatusType{
+					&secretsmanager.ReplicationStatusType{
+						Region: aws.String("us-west-2"),
+						Status: aws.String(secretsmanager.StatusTypeInProgress),
+					},
+				},
+			}, nil
+		},
+	}
+	startTime := time.Now()
+	// Create a new Rotator to test
+	r := rotate.NewRotator(rotate.Config{
+		SecretsManager:  sm,
+		SecretSetter:    test.MockSecretSetter{},
+		PasswordSetter:  test.MockPasswordSetter{},
+		ReplicationWait: retryWait,
+	})
+
+	// Simulate testSecret event from Secrets Manager
+	event := map[string]string{
+		"ClientRequestToken": "abc",
+		"SecretId":           "def",
+		"Step":               "finishSecret",
+	}
+	_, err := r.Handler(context.TODO(), event)
+
+	// expect an error
+	if err == nil {
+		t.Error(err)
+	}
+
+	finishTime := time.Now()
+	testDuration := finishTime.Sub(startTime)
+	if testDuration < retryWait {
+		t.Errorf("expected test to take %v duration but it finished in %v", retryWait, testDuration)
 	}
 }
 

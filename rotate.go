@@ -66,6 +66,10 @@ type Config struct {
 	// EventReceiver receives events during the four-step password rotation process.
 	// If none is provided, NullEventReceiver is used. See EventReceiver for more details.
 	EventReceiver EventReceiver
+
+	// ReplicationWait governs the duration password rotation lambda will wait for
+	// secret replication to secondary regions to complete
+	ReplicationWait time.Duration
 }
 
 // InvokedBySecretsManager returns true if the event is from Secrets Manager.
@@ -98,6 +102,7 @@ type Rotator struct {
 	clientRequestToken string
 	secretId           string
 	startTime          time.Time
+	replicationWait    time.Duration
 }
 
 // NewRotator creates a new Rotator.
@@ -114,11 +119,12 @@ func NewRotator(cfg Config) *Rotator {
 		ss = RandomPassword{}
 	}
 	return &Rotator{
-		sm:     cfg.SecretsManager,
-		db:     cfg.PasswordSetter,
-		ss:     ss,
-		event:  event,
-		skipDb: cfg.SkipDatabase,
+		sm:              cfg.SecretsManager,
+		db:              cfg.PasswordSetter,
+		ss:              ss,
+		event:           event,
+		skipDb:          cfg.SkipDatabase,
+		replicationWait: cfg.ReplicationWait,
 	}
 }
 
@@ -523,6 +529,12 @@ func (r *Rotator) FinishSecret(ctx context.Context, event map[string]string) err
 	downtime := now.Sub(r.startTime)
 	log.Printf("password downtime: %dms", downtime.Milliseconds())
 
+	// Wait for secret replication to complete to all replica regions
+	err = r.checkSecretReplicationStatus()
+	if err != nil {
+		return err
+	}
+
 	// Remove AWSPENDING label
 	debug("removing AWSPENDING from version id = %v", *newSecret.VersionId)
 	_, err = r.sm.UpdateSecretVersionStage(&secretsmanager.UpdateSecretVersionStageInput{
@@ -602,6 +614,52 @@ func (r *Rotator) rollback(ctx context.Context, creds db.NewPassword, rotationSt
 	return errRotationFailed // always return this error
 }
 
+// checks that secret have been replicated to all replica regions
+// this is necessary between multiple calls of UpdateSecretVersionStage
+// to guard against arace condition in AWS that leaves secret replication
+// stuck indefinitely.
+func (r *Rotator) checkSecretReplicationStatus() error {
+	log.Println("checking secret replication status")
+	waitDuration := DEFAULT_REPLICATION_WAIT
+	if r.replicationWait > 0 {
+		waitDuration = r.replicationWait
+	}
+
+	startTime := time.Now()
+	for time.Now().Sub(startTime) < waitDuration {
+		secret, err := r.sm.DescribeSecret(&secretsmanager.DescribeSecretInput{
+			SecretId: aws.String(r.secretId),
+		})
+		if err != nil {
+			return err
+		}
+		if secret == nil {
+			return fmt.Errorf("expected an non null secret for secretId %v but received null", r.secretId)
+		}
+		replicationSyncComplete := true
+		for _, status := range secret.ReplicationStatus {
+			if status == nil {
+				replicationSyncComplete = false
+				log.Println("encountered null replication status")
+				break
+			}
+			if *status.Status != secretsmanager.StatusTypeInSync {
+				replicationSyncComplete = false
+				log.Printf("replication status still in (%v) in region (%v) expecting (%v)\n", *status.Status, *status.Region, secretsmanager.StatusTypeInSync)
+				break
+			}
+		}
+		// only return success if all secret replica regions are in sync all
+		// other cases are treated as errors
+		if replicationSyncComplete {
+			log.Println("secret replication sync completed successfully")
+			return nil // success
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for secret replication StatusTypeInSync = true")
+}
+
 // --------------------------------------------------------------------------
 
 var (
@@ -616,6 +674,10 @@ var (
 	DebugSecret = false
 
 	debugLog = log.New(os.Stderr, "DEBUG ", log.LstdFlags|log.Lmicroseconds|log.Lshortfile|log.LUTC)
+
+	// DEFAULT_REPLICATION_WAIT is the default duration that password rotation lambda will
+	// wait for secret replication to secondary regions to complete
+	DEFAULT_REPLICATION_WAIT = 30 * time.Second
 )
 
 func debugSecret(msg string, v ...interface{}) {
