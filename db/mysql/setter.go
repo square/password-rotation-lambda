@@ -208,6 +208,9 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, actio
 
 		if action == rollback_password && !m.dbs[i].set {
 			log.Printf("%s: new password was not set, skip rollback", m.dbs[i].hostname)
+			// Sending to maxParallel so that we don't wait indefinitely
+			// for maxParallel channel in the rollback path.
+			m.maxParallel <- true
 			continue
 		}
 
