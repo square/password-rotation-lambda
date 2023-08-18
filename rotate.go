@@ -415,9 +415,9 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		_, prevVals, err := r.getSecret(AWSPREVIOUS)
 		if err != nil {
 			r.event.Receive(Event{
-				Name: EVENT_ERROR,
+				Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
 				Step: "setSecret",
-				Time: r.startTime,
+				Time: time.Now(),
 			})
 			return fmt.Errorf("current version of credential in secret manager is out of sync with db; "+
 				" unable to retreive previous version of the credential. %v", err)
@@ -429,9 +429,9 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		}
 		if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: prevCred, New: prevCred}); err != nil {
 			r.event.Receive(Event{
-				Name: EVENT_ERROR,
+				Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
 				Step: "setSecret",
-				Time: r.startTime,
+				Time: time.Now(),
 			})
 			return fmt.Errorf("all versions of credentials in secret manager is out of sync with db; "+
 				" unable to update secret. %v", err)
