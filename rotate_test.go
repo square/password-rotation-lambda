@@ -4,6 +4,7 @@ package rotate_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 )
 
 var (
+	secretString0 = `{"password":"p0","username":"foo","v":"0"}`
 	secretString1 = `{"password":"p1","username":"foo","v":"1"}`
 	secretString2 = `{"password":"p2","username":"foo","v":"2"}`
 	now           = time.Now()
@@ -240,6 +242,15 @@ func TestStepSetSecret(t *testing.T) {
 					VersionStages: []*string{aws.String(rotate.AWSPENDING)},
 					CreatedDate:   &now,
 				}, nil
+			case rotate.AWSPREVIOUS:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString2,
+					VersionId:     aws.String("v0"),
+					VersionStages: []*string{aws.String(rotate.AWSPREVIOUS)},
+					CreatedDate:   &now,
+				}, nil
 			default:
 				return nil, nil
 			}
@@ -249,14 +260,18 @@ func TestStepSetSecret(t *testing.T) {
 			return nil, nil
 		},
 	}
+	expectedUser := "foo"
+	expectedSecret := "p2"
 
 	ss := test.MockSecretSetter{
 		CredentialsFunc: func(secret map[string]string) (string, string) {
 			switch secret["v"] {
 			case "1":
-				return "foo", "p1"
+				return expectedUser, "p1"
 			case "2":
-				return "foo", "p2"
+				return expectedUser, expectedSecret
+			case "0":
+				return expectedUser, "p0"
 			default:
 				return "credUser", "credPass"
 			}
@@ -268,6 +283,12 @@ func TestStepSetSecret(t *testing.T) {
 		SetPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
 			gotUsername = creds.New.Username
 			gotPassword = creds.New.Password
+			return nil
+		},
+		VerifyPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			if creds.New.Password == expectedSecret {
+				return fmt.Errorf("fail to get to set password")
+			}
 			return nil
 		},
 	}
@@ -318,6 +339,410 @@ func TestStepSetSecret(t *testing.T) {
 		t.Error(err)
 	}
 	if nCallsToGetSecretValue != 4 {
+		t.Errorf("GetSecretValue called %d times, expected 4", nCallsToGetSecretValue)
+	}
+}
+
+func TestStepSetSecret_DBAlreadySetToPending(t *testing.T) {
+	// Test that the "setSecret" step gets both secrets (current and pending),
+	// gets the db creds from pending, and sets them via PasswordSetter. This is
+	// the second step in the four-step process.
+	var updateSecretVersionCalled bool
+	var nCallsToGetSecretValue int
+
+	// Create mock Secrets Manager client (mock AWS API calls) and SecretSetter
+	// (mock user-provided one)
+	sm := test.MockSecretsManager{
+		GetSecretValueFunc: func(input *secretsmanager.GetSecretValueInput) (*secretsmanager.GetSecretValueOutput, error) {
+			nCallsToGetSecretValue++
+			switch *input.VersionStage {
+			case rotate.AWSCURRENT:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString1,
+					VersionId:     aws.String("v1"),
+					VersionStages: []*string{aws.String(rotate.AWSCURRENT)},
+					CreatedDate:   &now,
+				}, nil
+			case rotate.AWSPENDING:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString2,
+					VersionId:     aws.String("v2"),
+					VersionStages: []*string{aws.String(rotate.AWSPENDING)},
+					CreatedDate:   &now,
+				}, nil
+			case rotate.AWSPREVIOUS:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString2,
+					VersionId:     aws.String("v0"),
+					VersionStages: []*string{aws.String(rotate.AWSPREVIOUS)},
+					CreatedDate:   &now,
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+		UpdateSecretVersionStageFunc: func(input *secretsmanager.UpdateSecretVersionStageInput) (*secretsmanager.UpdateSecretVersionStageOutput, error) {
+			updateSecretVersionCalled = true
+			return nil, nil
+		},
+	}
+	expectedUser := "foo"
+	expectedSecret := "p2"
+
+	ss := test.MockSecretSetter{
+		CredentialsFunc: func(secret map[string]string) (string, string) {
+			switch secret["v"] {
+			case "1":
+				return expectedUser, "p1"
+			case "2":
+				return expectedUser, expectedSecret
+			case "0":
+				return expectedUser, "p0"
+			default:
+				return "credUser", "credPass"
+			}
+		},
+	}
+
+	var gotUsername, gotPassword string
+	ps := test.MockPasswordSetter{
+		SetPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			gotUsername = creds.New.Username
+			gotPassword = creds.New.Password
+			return nil
+		},
+		VerifyPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+
+			return nil
+		},
+	}
+
+	// Create a new Rotator to test
+	r := rotate.NewRotator(rotate.Config{
+		SecretsManager: sm,
+		SecretSetter:   ss,
+		PasswordSetter: ps,
+	})
+
+	// Simulate setSecret event from Secrets Manager
+	event := map[string]string{
+		"ClientRequestToken": "abc",
+		"SecretId":           "def",
+		"Step":               "setSecret",
+	}
+	_, err := r.Handler(context.TODO(), event)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if gotUsername != "" {
+		t.Errorf("got username %s, expected \"\"", gotUsername)
+	}
+	if gotPassword != "" {
+		t.Errorf("got password %s, expected \"\"", gotPassword)
+	}
+
+	// The code should not call UpdateSecretVersionStage. That doesn't happen
+	// until the last step.
+	if updateSecretVersionCalled {
+		t.Errorf("UpdateSecretVersionStage called, expected no call by CreateSecret")
+	}
+
+	// ----------------------------------------------------------------------
+
+	// The code caches secrets by stage to save money on AWS API calls.
+	// We should have the first 2 calls from above:
+	if nCallsToGetSecretValue != 2 {
+		t.Errorf("GetSecretValue called %d times, expected 2", nCallsToGetSecretValue)
+	}
+
+	// Then if run the step again, the number of calls to GetSecretValue
+	// should not increase because the code uses cached values:
+	_, err = r.Handler(context.TODO(), event)
+	if err != nil {
+		t.Error(err)
+	}
+	if nCallsToGetSecretValue != 4 {
+		t.Errorf("GetSecretValue called %d times, expected 4", nCallsToGetSecretValue)
+	}
+}
+
+func TestStepSetSecret_DBSetToPrevoius(t *testing.T) {
+	// Test that the "setSecret" step gets both secrets (current and pending),
+	// gets the db creds from pending, and sets them via PasswordSetter. This is
+	// the second step in the four-step process.
+	var updateSecretVersionCalled bool
+	var nCallsToGetSecretValue int
+
+	// Create mock Secrets Manager client (mock AWS API calls) and SecretSetter
+	// (mock user-provided one)
+	sm := test.MockSecretsManager{
+		GetSecretValueFunc: func(input *secretsmanager.GetSecretValueInput) (*secretsmanager.GetSecretValueOutput, error) {
+			nCallsToGetSecretValue++
+			switch *input.VersionStage {
+			case rotate.AWSCURRENT:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString1,
+					VersionId:     aws.String("v1"),
+					VersionStages: []*string{aws.String(rotate.AWSCURRENT)},
+					CreatedDate:   &now,
+				}, nil
+			case rotate.AWSPENDING:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString2,
+					VersionId:     aws.String("v2"),
+					VersionStages: []*string{aws.String(rotate.AWSPENDING)},
+					CreatedDate:   &now,
+				}, nil
+			case rotate.AWSPREVIOUS:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString0,
+					VersionId:     aws.String("v0"),
+					VersionStages: []*string{aws.String(rotate.AWSPREVIOUS)},
+					CreatedDate:   &now,
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+		UpdateSecretVersionStageFunc: func(input *secretsmanager.UpdateSecretVersionStageInput) (*secretsmanager.UpdateSecretVersionStageOutput, error) {
+			updateSecretVersionCalled = true
+			return nil, nil
+		},
+	}
+	expectedUser := "foo"
+	expectedSecret := "p2"
+	previousSecret := "p0"
+	ss := test.MockSecretSetter{
+		CredentialsFunc: func(secret map[string]string) (string, string) {
+			switch secret["v"] {
+			case "1":
+				return expectedUser, "p1"
+			case "2":
+				return expectedUser, expectedSecret
+			case "0":
+				return expectedUser, previousSecret
+			default:
+				return "credUser", "credPass"
+			}
+		},
+	}
+	verifiedNewPassword := []string{}
+	verifiedOldPassword := []string{}
+	expectedNewPassword := []string{"p2", "p1", "p0"}
+	expectedOldPassword := []string{"p1", "p1", "p0"}
+
+	var gotUsername, gotPassword string
+	ps := test.MockPasswordSetter{
+		SetPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			gotUsername = creds.New.Username
+			gotPassword = creds.New.Password
+			return nil
+		},
+		VerifyPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			verifiedNewPassword = append(verifiedNewPassword, creds.New.Password)
+			verifiedOldPassword = append(verifiedOldPassword, creds.Current.Password)
+			if creds.Current.Password != previousSecret {
+				return fmt.Errorf("expected to error")
+			}
+			return nil
+		},
+	}
+
+	// Create a new Rotator to test
+	r := rotate.NewRotator(rotate.Config{
+		SecretsManager: sm,
+		SecretSetter:   ss,
+		PasswordSetter: ps,
+	})
+
+	// Simulate setSecret event from Secrets Manager
+	event := map[string]string{
+		"ClientRequestToken": "abc",
+		"SecretId":           "def",
+		"Step":               "setSecret",
+	}
+	_, err := r.Handler(context.TODO(), event)
+	if err != nil {
+		t.Error(err)
+	}
+
+	if gotUsername != expectedUser {
+		t.Errorf("got username %s, expected \"%v\"", gotUsername, expectedUser)
+	}
+	if gotPassword != expectedSecret {
+		t.Errorf("got password %s, expected \"%v\"", gotPassword, expectedSecret)
+	}
+	if diff := deep.Equal(expectedNewPassword, verifiedNewPassword); diff != nil {
+		t.Errorf("unexpected diff in new password verification: %v", diff)
+	}
+
+	if diff := deep.Equal(expectedOldPassword, verifiedOldPassword); diff != nil {
+		t.Errorf("unexpected diff in current password verification: %v", diff)
+	}
+
+	// The code should not call UpdateSecretVersionStage. That doesn't happen
+	// until the last step.
+	if updateSecretVersionCalled {
+		t.Errorf("UpdateSecretVersionStage called, expected no call by CreateSecret")
+	}
+
+	// ----------------------------------------------------------------------
+
+	// The code caches secrets by stage to save money on AWS API calls.
+	// We should have the first 2 calls from above:
+	if nCallsToGetSecretValue != 3 {
+		t.Errorf("GetSecretValue called %d times, expected 2", nCallsToGetSecretValue)
+	}
+
+	// Then if run the step again, the number of calls to GetSecretValue
+	// should not increase because the code uses cached values:
+	_, err = r.Handler(context.TODO(), event)
+	if err != nil {
+		t.Error(err)
+	}
+	if nCallsToGetSecretValue != 6 {
+		t.Errorf("GetSecretValue called %d times, expected 4", nCallsToGetSecretValue)
+	}
+}
+
+func TestStepSetSecret_DBMismatch(t *testing.T) {
+	// Test that the "setSecret" step gets both secrets (current and pending),
+	// gets the db creds from pending, and sets them via PasswordSetter. This is
+	// the second step in the four-step process.
+	var updateSecretVersionCalled bool
+	var nCallsToGetSecretValue int
+
+	// Create mock Secrets Manager client (mock AWS API calls) and SecretSetter
+	// (mock user-provided one)
+	sm := test.MockSecretsManager{
+		GetSecretValueFunc: func(input *secretsmanager.GetSecretValueInput) (*secretsmanager.GetSecretValueOutput, error) {
+			nCallsToGetSecretValue++
+			switch *input.VersionStage {
+			case rotate.AWSCURRENT:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString1,
+					VersionId:     aws.String("v1"),
+					VersionStages: []*string{aws.String(rotate.AWSCURRENT)},
+					CreatedDate:   &now,
+				}, nil
+			case rotate.AWSPENDING:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString2,
+					VersionId:     aws.String("v2"),
+					VersionStages: []*string{aws.String(rotate.AWSPENDING)},
+					CreatedDate:   &now,
+				}, nil
+			case rotate.AWSPREVIOUS:
+				return &secretsmanager.GetSecretValueOutput{
+					ARN:           aws.String("arn"),
+					Name:          aws.String("sercetName"),
+					SecretString:  &secretString0,
+					VersionId:     aws.String("v0"),
+					VersionStages: []*string{aws.String(rotate.AWSPREVIOUS)},
+					CreatedDate:   &now,
+				}, nil
+			default:
+				return nil, nil
+			}
+		},
+		UpdateSecretVersionStageFunc: func(input *secretsmanager.UpdateSecretVersionStageInput) (*secretsmanager.UpdateSecretVersionStageOutput, error) {
+			updateSecretVersionCalled = true
+			return nil, nil
+		},
+	}
+	expectedUser := "foo"
+	expectedSecret := "p2"
+	previousSecret := "p0"
+	ss := test.MockSecretSetter{
+		CredentialsFunc: func(secret map[string]string) (string, string) {
+			switch secret["v"] {
+			case "1":
+				return expectedUser, "p1"
+			case "2":
+				return expectedUser, expectedSecret
+			case "0":
+				return expectedUser, previousSecret
+			default:
+				return "credUser", "credPass"
+			}
+		},
+	}
+
+	var gotUsername, gotPassword string
+	ps := test.MockPasswordSetter{
+		SetPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			gotUsername = creds.New.Username
+			gotPassword = creds.New.Password
+			return nil
+		},
+		VerifyPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
+			return fmt.Errorf("expected to error")
+		},
+	}
+
+	// Create a new Rotator to test
+	r := rotate.NewRotator(rotate.Config{
+		SecretsManager: sm,
+		SecretSetter:   ss,
+		PasswordSetter: ps,
+	})
+
+	// Simulate setSecret event from Secrets Manager
+	event := map[string]string{
+		"ClientRequestToken": "abc",
+		"SecretId":           "def",
+		"Step":               "setSecret",
+	}
+	_, err := r.Handler(context.TODO(), event)
+	if err == nil {
+		t.Error(err)
+	}
+
+	if gotUsername != "" {
+		t.Errorf("got username %s, expected \"\"", gotUsername)
+	}
+	if gotPassword != "" {
+		t.Errorf("got password %s, expected \"\"", gotPassword)
+	}
+
+	// The code should not call UpdateSecretVersionStage. That doesn't happen
+	// until the last step.
+	if updateSecretVersionCalled {
+		t.Errorf("UpdateSecretVersionStage called, expected no call by CreateSecret")
+	}
+
+	// ----------------------------------------------------------------------
+
+	// The code caches secrets by stage to save money on AWS API calls.
+	// We should have the first 2 calls from above:
+	if nCallsToGetSecretValue != 3 {
+		t.Errorf("GetSecretValue called %d times, expected 2", nCallsToGetSecretValue)
+	}
+
+	// Then if run the step again, the number of calls to GetSecretValue
+	// should not increase because the code uses cached values:
+	_, err = r.Handler(context.TODO(), event)
+	if err == nil {
+		t.Error(err)
+	}
+	if nCallsToGetSecretValue != 6 {
 		t.Errorf("GetSecretValue called %d times, expected 4", nCallsToGetSecretValue)
 	}
 }
