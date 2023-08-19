@@ -419,8 +419,12 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 				Step: "setSecret",
 				Time: time.Now(),
 			})
-			return fmt.Errorf("current version of credential in secret manager is out of sync with db; "+
-				" unable to retreive previous version of the credential. %v", err)
+			log.Printf("ERROR: current version of credential in secret manager is out of sync with db; "+
+				" unable to retreive previous version of the credential. %v  "+
+				" starting rollback", err)
+
+			// calling rollback to remove AWSPENDING Label.
+			return r.rollback(ctx, creds, "SetSecret")
 		}
 		prevUsername, prevPassword := r.ss.Credentials(prevVals)
 		prevCred := db.Credentials{
@@ -433,8 +437,12 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 				Step: "setSecret",
 				Time: time.Now(),
 			})
-			return fmt.Errorf("all versions of credentials in secret manager is out of sync with db; "+
-				" unable to update secret. %v", err)
+			log.Printf("ERROR: all versions of credentials in secret manager is out of sync with db; "+
+				" unable to update secret. %v  "+
+				" starting rollback", err)
+
+			// calling rollback to remove AWSPENDING Label.
+			return r.rollback(ctx, creds, "SetSecret")
 		}
 		// update creds used for setting password since we've confirmed that the previousVersion secrets are good
 		creds = db.NewPassword{
