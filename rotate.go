@@ -381,37 +381,26 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		Current: curCred,
 		New:     newCred,
 	}
-	debugSecret("db credentials: %+v", creds)
-
-	// Have user-provided PasswordSetter set database password to new value.
-	// Normally, this is when the database password actually changes.
-	// The PasswordSetter is responsible for knowing which db instances to change.
-	// mysql.PasswordSetter, for example, sets every RDS instance in parallel.
-	r.startTime = time.Now()
-	r.event.Receive(Event{
-		Name: EVENT_BEGIN_PASSWORD_ROTATION,
-		Step: "setSecret",
-		Time: r.startTime,
-	})
+	debugSecret("SetSecret db credentials: %+v", creds)
 
 	// Check to see if DB is already set to Pending password.
 	// This can happen if there's a previous run that did not complete successfully.
 	// Treat this as if SetPassword has completed successfully.
-	log.Printf("Verifying if DB is already set to AWSPENDING version of secret")
+	log.Println("Verifying if DB is already set to AWSPENDING version of secret")
 	if err := r.db.VerifyPassword(ctx, creds); err == nil {
 		r.event.Receive(Event{
 			Name: EVENT_END_PASSWORD_ROTATION,
 			Step: "setSecret",
 			Time: r.startTime,
 		})
-		log.Printf("DB is already set to AWSPENDING version of secret, no action")
+		log.Println("DB is already set to AWSPENDING version of secret, no action")
 		return nil
 	}
 
 	// Verify that credentials are valid before attempting to update secrets
-	log.Printf("Verifying if AWSCURRENT version of secret is valid")
+	log.Println("Verifying if AWSCURRENT version of secret is valid")
 	if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: curCred, New: curCred}); err != nil {
-		log.Printf("ERROR: DB is not set to AWSCURRENT version of secret, attempting to verify AWSPREVIOUS version: %v", err)
+		log.Print("ERROR: DB is not set to AWSCURRENT version of secret, attempting to verify AWSPREVIOUS version: %v", err)
 		debugSecret(fmt.Sprintf("creds used for verifying AWSCURRENT : %v", curCred))
 		// the current version of secret is out of sync with db.  check if db is in sync with
 		// the previous version of the secret
@@ -452,9 +441,21 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 			Current: prevCred,
 			New:     newCred,
 		}
-		log.Printf("DB is set to AWSPREVIOUS version of secret")
+		log.Println("DB is set to AWSPREVIOUS version of secret")
 	}
 	debugSecret(fmt.Sprintf("creds used for setPassword : %v", creds))
+
+	// Have user-provided PasswordSetter set database password to new value.
+	// Normally, this is when the database password actually changes.
+	// The PasswordSetter is responsible for knowing which db instances to change.
+	// mysql.PasswordSetter, for example, sets every RDS instance in parallel.
+	r.startTime = time.Now()
+	r.event.Receive(Event{
+		Name: EVENT_BEGIN_PASSWORD_ROTATION,
+		Step: "setSecret",
+		Time: r.startTime,
+	})
+
 	if err := r.db.SetPassword(ctx, creds); err != nil {
 		// Roll back to original password since setting the new password failed.
 		// Depending on how the PasswordSetter is configured, this might be a no-op.
