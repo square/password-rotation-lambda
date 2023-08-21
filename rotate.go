@@ -397,6 +397,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 	// Check to see if DB is already set to Pending password.
 	// This can happen if there's a previous run that did not complete successfully.
 	// Treat this as if SetPassword has completed successfully.
+	log.Printf("Verifying if DB is already set to AWSPENDING version of secret")
 	if err := r.db.VerifyPassword(ctx, creds); err == nil {
 		r.event.Receive(Event{
 			Name: EVENT_END_PASSWORD_ROTATION,
@@ -408,8 +409,10 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 	}
 
 	// Verify that credentials are valid before attempting to update secrets
-
+	log.Printf("Verifying if AWSCURRENT version of secret is valid")
 	if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: curCred, New: curCred}); err != nil {
+		log.Printf("ERROR: DB is not set to AWSCURRENT version of secret, attempting to verify AWSPREVIOUS version: %v", err)
+		debugSecret(fmt.Sprintf("creds used for verifying AWSCURRENT : %v", curCred))
 		// the current version of secret is out of sync with db.  check if db is in sync with
 		// the previous version of the secret
 		_, prevVals, err := r.getSecret(AWSPREVIOUS)
@@ -419,8 +422,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 				Step: "setSecret",
 				Time: time.Now(),
 			})
-			log.Printf("ERROR: current version of credential in secret manager is out of sync with db; "+
-				" unable to retreive previous version of the credential. %v  "+
+			log.Printf("ERROR: unable to retreive previous version of the credential. %v  "+
 				" starting rollback", err)
 
 			// calling rollback to remove AWSPENDING Label.
@@ -437,6 +439,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 				Step: "setSecret",
 				Time: time.Now(),
 			})
+			debugSecret(fmt.Sprintf("creds used for verifying AWSPREVIOUS : %v", prevCred))
 			log.Printf("ERROR: all versions of credentials in secret manager is out of sync with db; "+
 				" unable to update secret. %v  "+
 				" starting rollback", err)
