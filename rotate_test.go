@@ -618,6 +618,7 @@ func TestStepSetSecret_DBSetToPrevoius(t *testing.T) {
 
 func TestStepSetSecret_DBMismatch(t *testing.T) {
 	// Test that all versions of secrets are mismatched and db is out of sync with secret manager.
+	// We expected SetSecret to return an error before SetPassword is called
 	var updateSecretVersionCalled bool
 	var nCallsToGetSecretValue int
 
@@ -682,10 +683,12 @@ func TestStepSetSecret_DBMismatch(t *testing.T) {
 	}
 
 	var gotUsername, gotPassword string
+	setPasswordCalled := false
 	ps := test.MockPasswordSetter{
 		SetPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
 			gotUsername = creds.New.Username
 			gotPassword = creds.New.Password
+			setPasswordCalled = true
 			return nil
 		},
 		VerifyPasswordFunc: func(ctx context.Context, creds db.NewPassword) error {
@@ -727,6 +730,10 @@ func TestStepSetSecret_DBMismatch(t *testing.T) {
 
 	if nCallsToGetSecretValue != 4 {
 		t.Errorf("GetSecretValue called %d times, expected 4", nCallsToGetSecretValue)
+	}
+
+	if setPasswordCalled {
+		t.Errorf("SetPassword was called, expected it to not be called due to previous errors")
 	}
 
 }
