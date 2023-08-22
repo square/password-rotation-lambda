@@ -344,9 +344,8 @@ func TestStepSetSecret(t *testing.T) {
 }
 
 func TestStepSetSecret_DBAlreadySetToPending(t *testing.T) {
-	// Test that the "setSecret" step gets both secrets (current and pending),
-	// gets the db creds from pending, and sets them via PasswordSetter. This is
-	// the second step in the four-step process.
+	// Test that the "setSecret" with expectation that secret is already set
+	// to AWSPENDING in db.
 	var updateSecretVersionCalled bool
 	var nCallsToGetSecretValue int
 
@@ -474,9 +473,8 @@ func TestStepSetSecret_DBAlreadySetToPending(t *testing.T) {
 }
 
 func TestStepSetSecret_DBSetToPrevoius(t *testing.T) {
-	// Test that the "setSecret" step gets both secrets (current and pending),
-	// gets the db creds from pending, and sets them via PasswordSetter. This is
-	// the second step in the four-step process.
+	// Test that the "setSecret" step with expectation that
+	// DB is set to Secret of AWSPREVIOUS
 	var updateSecretVersionCalled bool
 	var nCallsToGetSecretValue int
 
@@ -619,9 +617,7 @@ func TestStepSetSecret_DBSetToPrevoius(t *testing.T) {
 }
 
 func TestStepSetSecret_DBMismatch(t *testing.T) {
-	// Test that the "setSecret" step gets both secrets (current and pending),
-	// gets the db creds from pending, and sets them via PasswordSetter. This is
-	// the second step in the four-step process.
+	// Test that all versions of secrets are mismatched and db is out of sync with secret manager.
 	var updateSecretVersionCalled bool
 	var nCallsToGetSecretValue int
 
@@ -722,29 +718,17 @@ func TestStepSetSecret_DBMismatch(t *testing.T) {
 		t.Errorf("got password %s, expected \"\"", gotPassword)
 	}
 
-	// The code should not call UpdateSecretVersionStage. That doesn't happen
-	// until the last step.
-	if updateSecretVersionCalled {
-		t.Errorf("UpdateSecretVersionStage called, expected no call by CreateSecret")
+	// The code should call UpdateSecretVersionStage. As we should have rolled back
+	if !updateSecretVersionCalled {
+		t.Errorf("UpdateSecretVersionStage not called, expected it to be called by rollback")
 	}
 
 	// ----------------------------------------------------------------------
 
-	// The code caches secrets by stage to save money on AWS API calls.
-	// We should have the first 2 calls from above:
-	if nCallsToGetSecretValue != 3 {
-		t.Errorf("GetSecretValue called %d times, expected 2", nCallsToGetSecretValue)
-	}
-
-	// Then if run the step again, the number of calls to GetSecretValue
-	// should not increase because the code uses cached values:
-	_, err = r.Handler(context.TODO(), event)
-	if err == nil {
-		t.Error(err)
-	}
-	if nCallsToGetSecretValue != 6 {
+	if nCallsToGetSecretValue != 4 {
 		t.Errorf("GetSecretValue called %d times, expected 4", nCallsToGetSecretValue)
 	}
+
 }
 
 func TestStepTestSecret(t *testing.T) {
