@@ -383,7 +383,8 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 	}
 
 	// Check to see if DB is already set to Pending password.
-	// This can happen if there's a previous run that did not complete successfully.
+	// This can happen if there's a previous run of the lambda crashed
+	// in TestSecret or FinishSecret steps.
 	// Treat this as if SetPassword has completed successfully.
 	log.Println("Verifying if DB is already set to AWSPENDING version of secret")
 	if err := r.db.VerifyPassword(ctx, creds); err == nil {
@@ -397,6 +398,10 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 	}
 
 	// Verify that credentials are valid before attempting to update secrets
+	// this is to guard against scenarios that DB is in mismatch state with secret managers
+	// AWSCURRENT version of the secret.  A couple of example of this is
+	// 1. Manual update of password in DB
+	// 2. Secret Manager secret is changed manually
 	log.Println("Verifying if AWSCURRENT version of secret is valid")
 	if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: curCred, New: curCred}); err != nil {
 		log.Printf("ERROR: DB is not set to AWSCURRENT version of secret, attempting to verify AWSPREVIOUS version: %v", err)
@@ -427,13 +432,12 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 				Step: "setSecret",
 				Time: time.Now(),
 			})
-			log.Printf("ERROR: all versions of credentials in secret manager is out of sync with db; %v "+
-				" starting rollback", err)
+			log.Printf("ERROR: all versions of credentials in secret manager is out of sync with db; %v starting rollback", err)
 
 			// calling rollback to remove AWSPENDING Label.
 			return r.rollback(ctx, creds, "SetSecret")
 		}
-		// update creds used for setting password since we've confirmed that the previousVersion secrets are good
+		// update creds used for setting password since we've confirmed that DB is set to previousVersion of secrets
 		creds = db.NewPassword{
 			Current: prevCred,
 			New:     newCred,
@@ -451,7 +455,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		Step: "setSecret",
 		Time: r.startTime,
 	})
-
+	debugSecret("db credentials: %+v", creds)
 	if err := r.db.SetPassword(ctx, creds); err != nil {
 		// Roll back to original password since setting the new password failed.
 		// Depending on how the PasswordSetter is configured, this might be a no-op.
