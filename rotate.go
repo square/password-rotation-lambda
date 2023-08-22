@@ -381,7 +381,6 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		Current: curCred,
 		New:     newCred,
 	}
-	debugSecret("SetSecret db credentials: %+v", creds)
 
 	// Check to see if DB is already set to Pending password.
 	// This can happen if there's a previous run that did not complete successfully.
@@ -421,7 +420,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 			Username: prevUsername,
 			Password: prevPassword,
 		}
-		debugSecret(fmt.Sprintf("AWSPREVIOUS secret used to verify: %v", prevCred))
+
 		if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: prevCred, New: prevCred}); err != nil {
 			r.event.Receive(Event{
 				Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
@@ -441,7 +440,6 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		}
 		log.Println("DB is set to AWSPREVIOUS version of secret")
 	}
-	debugSecret(fmt.Sprintf("creds used for setPassword : %v", creds))
 
 	// Have user-provided PasswordSetter set database password to new value.
 	// Normally, this is when the database password actually changes.
