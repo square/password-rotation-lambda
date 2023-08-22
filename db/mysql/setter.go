@@ -160,11 +160,6 @@ func (m *PasswordSetter) Rollback(ctx context.Context, creds db.NewPassword) err
 		log.Printf("Rollback return: %dms", d.Milliseconds())
 	}()
 
-	// Reset flags and errors between attempts to rollback the password to prevent
-	// potential false positives caused by two successive runs.
-	for i, db := range m.dbs {
-		m.dbs[i] = dbInstance{hostname: db.hostname}
-	}
 	swapCreds := db.NewPassword{
 		Current: creds.New,
 		New:     creds.Current,
