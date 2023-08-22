@@ -401,7 +401,6 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 	log.Println("Verifying if AWSCURRENT version of secret is valid")
 	if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: curCred, New: curCred}); err != nil {
 		log.Print("ERROR: DB is not set to AWSCURRENT version of secret, attempting to verify AWSPREVIOUS version: %v", err)
-		debugSecret(fmt.Sprintf("creds used for verifying AWSCURRENT : %v", curCred))
 		// the current version of secret is out of sync with db.  check if db is in sync with
 		// the previous version of the secret
 		_, prevVals, err := r.getSecret(AWSPREVIOUS)
@@ -422,15 +421,14 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 			Username: prevUsername,
 			Password: prevPassword,
 		}
+		debugSecret(fmt.Sprintf("AWSPREVIOUS secret used to verify: %v", prevCred))
 		if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: prevCred, New: prevCred}); err != nil {
 			r.event.Receive(Event{
 				Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
 				Step: "setSecret",
 				Time: time.Now(),
 			})
-			debugSecret(fmt.Sprintf("creds used for verifying AWSPREVIOUS : %v", prevCred))
-			log.Printf("ERROR: all versions of credentials in secret manager is out of sync with db; "+
-				" unable to update secret. %v  "+
+			log.Printf("ERROR: all versions of credentials in secret manager is out of sync with db; %v "+
 				" starting rollback", err)
 
 			// calling rollback to remove AWSPENDING Label.

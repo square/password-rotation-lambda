@@ -279,6 +279,7 @@ func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, actio
 			}
 		case verify_password:
 			if db.verifyError != nil {
+				log.Printf("ran into verify error: %v", db.verifyError)
 				errCount += 1
 			}
 		case rollback_password:
