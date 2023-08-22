@@ -159,6 +159,12 @@ func (m *PasswordSetter) Rollback(ctx context.Context, creds db.NewPassword) err
 		d := time.Now().Sub(t0)
 		log.Printf("Rollback return: %dms", d.Milliseconds())
 	}()
+
+	// Reset flags and errors between attempts to rollback the password to prevent
+	// potential false positives caused by two successive runs.
+	for i, db := range m.dbs {
+		m.dbs[i] = dbInstance{hostname: db.hostname}
+	}
 	swapCreds := db.NewPassword{
 		Current: creds.New,
 		New:     creds.Current,
@@ -174,6 +180,12 @@ func (m *PasswordSetter) VerifyPassword(ctx context.Context, creds db.NewPasswor
 		d := time.Now().Sub(t0)
 		log.Printf("VerifyPassword return: %dms", d.Milliseconds())
 	}()
+
+	// Reset flags and errors between attempts to verify the password to prevent
+	// potential false positives caused by two successive runs.
+	for i, db := range m.dbs {
+		m.dbs[i] = dbInstance{hostname: db.hostname}
+	}
 	return m.setAll(ctx, creds, verify_password)
 }
 
@@ -197,6 +209,7 @@ const (
 func (m *PasswordSetter) setAll(ctx context.Context, creds db.NewPassword, action string) error {
 	log.Printf("%s password on %d RDS instances, %d in parallel...", action, len(m.dbs), m.cfg.Parallel)
 	var wg sync.WaitGroup
+
 	for i := range m.dbs {
 		// Wait for a slot in the parallel semaphore or the context to be cancelled
 		select {
