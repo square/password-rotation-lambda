@@ -381,7 +381,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		Current: curCred,
 		New:     newCred,
 	}
-
+	debugSecret("db credentials: %+v", creds)
 	// Check to see if DB is already set to Pending password.
 	// This can happen if there's a previous run of the lambda crashed
 	// in TestSecret or FinishSecret steps.
@@ -455,7 +455,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		Step: "setSecret",
 		Time: r.startTime,
 	})
-	debugSecret("db credentials: %+v", creds)
+
 	if err := r.db.SetPassword(ctx, creds); err != nil {
 		// Roll back to original password since setting the new password failed.
 		// Depending on how the PasswordSetter is configured, this might be a no-op.
