@@ -22,8 +22,9 @@ import (
 )
 
 const (
-	AWSCURRENT = "AWSCURRENT"
-	AWSPENDING = "AWSPENDING"
+	AWSCURRENT  = "AWSCURRENT"
+	AWSPENDING  = "AWSPENDING"
+	AWSPREVIOUS = "AWSPREVIOUS"
 )
 
 func init() {
@@ -364,19 +365,85 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 	}
 	curUsername, curPassword := r.ss.Credentials(curVals)
 
+	curCred := db.Credentials{
+		Username: curUsername,
+		Password: curPassword,
+	}
+
+	newCred := db.Credentials{
+		Username: newUsername,
+		Password: newPassword,
+	}
+
 	// Combine the current and new credentials. This is plumbed all the way down
 	// into the db.PassswordSetter implementation.
 	creds := db.NewPassword{
-		Current: db.Credentials{
-			Username: curUsername,
-			Password: curPassword,
-		},
-		New: db.Credentials{
-			Username: newUsername,
-			Password: newPassword,
-		},
+		Current: curCred,
+		New:     newCred,
 	}
 	debugSecret("db credentials: %+v", creds)
+	// Check to see if DB is already set to Pending password.
+	// This can happen if there's a previous run of the lambda crashed
+	// in TestSecret or FinishSecret steps.
+	// Treat this as if SetPassword has completed successfully.
+	log.Println("Verifying if DB is already set to AWSPENDING version of secret")
+	if err := r.db.VerifyPassword(ctx, creds); err == nil {
+		r.event.Receive(Event{
+			Name: EVENT_END_PASSWORD_ROTATION,
+			Step: "setSecret",
+			Time: r.startTime,
+		})
+		log.Println("DB is already set to AWSPENDING version of secret, no action")
+		return nil
+	}
+
+	// Verify that credentials are valid before attempting to update secrets
+	// this is to guard against scenarios that DB is in mismatch state with secret managers
+	// AWSCURRENT version of the secret.  A couple of example of this is
+	// 1. Manual update of password in DB
+	// 2. Secret Manager secret is changed manually
+	log.Println("Verifying if AWSCURRENT version of secret is valid")
+	if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: curCred, New: curCred}); err != nil {
+		log.Printf("ERROR: DB is not set to AWSCURRENT version of secret, attempting to verify AWSPREVIOUS version: %v", err)
+		// the current version of secret is out of sync with db.  check if db is in sync with
+		// the previous version of the secret
+		_, prevVals, err := r.getSecret(AWSPREVIOUS)
+		if err != nil {
+			r.event.Receive(Event{
+				Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
+				Step: "setSecret",
+				Time: time.Now(),
+			})
+			log.Printf("ERROR: unable to retreive previous version of the credential. %v  "+
+				" starting rollback", err)
+
+			// calling rollback to remove AWSPENDING Label.
+			return r.rollback(ctx, creds, "SetSecret")
+		}
+		prevUsername, prevPassword := r.ss.Credentials(prevVals)
+		prevCred := db.Credentials{
+			Username: prevUsername,
+			Password: prevPassword,
+		}
+
+		if err := r.db.VerifyPassword(ctx, db.NewPassword{Current: prevCred, New: prevCred}); err != nil {
+			r.event.Receive(Event{
+				Name: EVENT_BEGIN_PASSWORD_ROLLBACK,
+				Step: "setSecret",
+				Time: time.Now(),
+			})
+			log.Printf("ERROR: all versions of credentials in secret manager is out of sync with db; %v starting rollback", err)
+
+			// calling rollback to remove AWSPENDING Label.
+			return r.rollback(ctx, creds, "SetSecret")
+		}
+		// update creds used for setting password since we've confirmed that DB is set to previousVersion of secrets
+		creds = db.NewPassword{
+			Current: prevCred,
+			New:     newCred,
+		}
+		log.Println("DB is set to AWSPREVIOUS version of secret")
+	}
 
 	// Have user-provided PasswordSetter set database password to new value.
 	// Normally, this is when the database password actually changes.
@@ -388,6 +455,7 @@ func (r *Rotator) SetSecret(ctx context.Context, event map[string]string) error 
 		Step: "setSecret",
 		Time: r.startTime,
 	})
+
 	if err := r.db.SetPassword(ctx, creds); err != nil {
 		// Roll back to original password since setting the new password failed.
 		// Depending on how the PasswordSetter is configured, this might be a no-op.
