@@ -30,7 +30,12 @@ type PasswordClient interface {
 // multiple goroutines. Retries are not supported. The caller is responsible for
 // retrying on error.
 //
-// TLS connections using the 2019 RDS CA are supported. The RDS CA is built-in;
+// TLS connections using the following RDS CA
+//
+//   - rds-ca-2019
+//   - rds-ca-rsa2048-g1
+//
+// The RDS CA is built-in;
 // it does not need to be provided.
 type RDSClient struct {
 	tls    bool
