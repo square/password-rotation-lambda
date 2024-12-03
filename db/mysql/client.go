@@ -80,7 +80,7 @@ func (c *RDSClient) SetPassword(ctx context.Context, creds db.NewPassword) error
 
 	// Set NEW password
 	escapedPassword := strings.ReplaceAll(creds.New.Password, "'", "\\'")
-	alter := "ALTER USER CURRENT_USER IDENTIFIED BY '" + escapedPassword + "'"
+	alter := "ALTER USER IF EXISTS CURRENT_USER IDENTIFIED BY '" + escapedPassword + "'"
 
 	t0 := time.Now()
 	_, err = db.ExecContext(ctx, alter)
